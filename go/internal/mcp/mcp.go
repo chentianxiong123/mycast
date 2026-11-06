@@ -1,7 +1,7 @@
 // Package mcp 为 mycast 提供 MCP（Model Context Protocol）Streamable HTTP 端点。
 //
-// 模仿 searxng-mcp 的传输模式（initialize/tools/list/tools/call + Mcp-Session-Id），
-// 但用 Go 标准库 net/http 重写，零外部依赖，内嵌进 mycast 单二进制。
+// 用官方 Go MCP 库 github.com/mark3labs/mcp-go 实现（不再手写协议），
+// 原生支持 Streamable HTTP，直接当 http.Handler 挂进 mycast 单二进制。
 //
 // 暴露给 AI 的工具（老人一句话投屏的最后一环）：
 //   - search_pirate  搜盗版站（复用 search.Aggregator，bing/360/百度 自聚合）
@@ -11,30 +11,16 @@ package mcp
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
-	"io"
 	"net/http"
 	"strings"
-	"sync"
-	"time"
+
+	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
 
 	"mycast/internal/search"
 	"mycast/internal/sniff"
 )
-
-// ProtocolVersion MCP 协议版本（对齐 searxng-mcp）。
-const ProtocolVersion = "2025-03-26"
-
-// Server MCP 端点：持有 mycast 的搜索/嗅探/投屏依赖（接口，便于测试注入）。
-type Server struct {
-	Search Searcher
-	Sniff  Sniffer
-	Relay  Caster
-
-	mu       sync.Mutex
-	sessions map[string]time.Time // session_id → 创建时间
-}
 
 // Searcher 搜索能力（*search.Aggregator 满足）。
 type Searcher interface {
@@ -47,197 +33,85 @@ type Sniffer interface {
 	ResolveStream(playURL string) (streamURL, mime string, err error)
 }
 
-// Caster 投屏能力（*relay.Relay 满足）。
+// Caster 投屏能力（*relay.Relay 满足，用接口避免 mcp 依赖投屏包）。
 type Caster interface {
 	CastStream(streamURL, referer string)
 }
 
-// New 创建 MCP 服务。
-func New(s Searcher, sn Sniffer, rl Caster) *Server {
-	return &Server{
-		Search:   s,
-		Sniff:    sn,
-		Relay:    rl,
-		sessions: map[string]time.Time{},
-	}
+// Server MCP 端点：持有 mycast 的搜索/嗅探/投屏依赖（接口，便于测试注入）。
+type Server struct {
+	Search Searcher
+	Sniff  Sniffer
+	Cast   Caster
+
+	mcpServer *server.MCPServer
+	httpSrv   *server.StreamableHTTPServer
 }
 
-// tool 一个 MCP 工具定义。
-type tool struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	InputSchema map[string]any `json:"inputSchema"`
-}
+// New 创建 MCP 服务（mcp-go 官方库）。
+func New(s Searcher, sn Sniffer, c Caster) *Server {
+	srv := &Server{Search: s, Sniff: sn, Cast: c}
 
-// tools 暴露给 AI 的工具清单。
-var tools = []tool{
-	{
-		Name:        "search_pirate",
-		Description: "搜索盗版影视站（bing/360/百度 三引擎聚合）。输入剧名/关键词，返回站名+详情页 URL。",
-		InputSchema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"query": map[string]any{"type": "string", "description": "搜索关键词，如：繁花 在线观看"},
-			},
-			"required": []string{"query"},
-		},
-	},
-	{
-		Name:        "sniff_episodes",
-		Description: "从盗版站详情页 URL 提取全部集数。输入详情页链接，返回第N集+播放页 URL 列表。",
-		InputSchema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"url": map[string]any{"type": "string", "description": "盗版站详情页 URL，如 https://xxx.com/voddetail/22548.html"},
-			},
-			"required": []string{"url"},
-		},
-	},
-	{
-		Name:        "cast_to_tv",
-		Description: "拿流并投屏到电视。输入某一集的播放页 URL（或直接 m3u8/mp4），自动提取流地址并投屏。",
-		InputSchema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"url":   map[string]any{"type": "string", "description": "播放页 URL 或直链 m3u8/mp4"},
-				"title": map[string]any{"type": "string", "description": "可选的播放标题", "default": ""},
-			},
-			"required": []string{"url"},
-		},
-	},
+	ms := server.NewMCPServer("mycast", "0.1.0")
+	ms.AddTool(mcp.NewTool("search_pirate",
+		mcp.WithDescription("搜索盗版影视站（bing/360/百度 三引擎聚合）。输入剧名/关键词，返回站名+详情页 URL。"),
+		mcp.WithString("query", mcp.Required(), mcp.Description("搜索关键词，如：繁花 在线观看")),
+	), srv.handleSearch)
+	ms.AddTool(mcp.NewTool("sniff_episodes",
+		mcp.WithDescription("从盗版站详情页 URL 提取全部集数。输入详情页链接，返回第N集+播放页 URL 列表。"),
+		mcp.WithString("url", mcp.Required(), mcp.Description("盗版站详情页 URL，如 https://xxx.com/voddetail/22548.html")),
+	), srv.handleSniff)
+	ms.AddTool(mcp.NewTool("cast_to_tv",
+		mcp.WithDescription("拿流并投屏到电视。输入某一集的播放页 URL（或直接 m3u8/mp4），自动提取流地址并投屏。"),
+		mcp.WithString("url", mcp.Required(), mcp.Description("播放页 URL 或直链 m3u8/mp4")),
+		mcp.WithString("title", mcp.Description("可选的播放标题")),
+	), srv.handleCast)
+
+	srv.mcpServer = ms
+	srv.httpSrv = server.NewStreamableHTTPServer(ms)
+	return srv
 }
 
 // Handler 返回 /mcp 的 http.Handler（Streamable HTTP 传输）。
 func (s *Server) Handler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/mcp", s.handleMCP)
-	return mux
+	return s.httpSrv
 }
 
-// handleMCP MCP Streamable HTTP 端点。
-// 只接受 POST（initialize/tools/list/tools/call），其余方法 405。
-func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", "POST, OPTIONS")
-		http.Error(w, "Method not allowed. Use POST.", http.StatusMethodNotAllowed)
-		return
+// handleSearch 搜盗版站。
+func (s *Server) handleSearch(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := req.GetArguments()
+	qs, _ := args["query"].(string)
+	if qs == "" {
+		return mcp.NewToolResultError("缺少关键词 query"), nil
 	}
-	// CORS（供浏览器侧 MCP 客户端用）
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, MCP-Protocol-Version, Mcp-Session-Id, Mcp-Method, Mcp-Name, Mcp-Version, Authorization")
-
-	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	rs, err := s.Search.Search(ctx, qs)
 	if err != nil {
-		writeRPC(w, rpcError(nil, -32700, "Parse error: "+err.Error()))
-		return
+		return mcp.NewToolResultError(err.Error()), nil
 	}
-	var req jsonRPC
-	if err := json.Unmarshal(body, &req); err != nil {
-		writeRPC(w, rpcError(req.ID, -32700, "Parse error: invalid JSON"))
-		return
-	}
-
-	sessionID := r.Header.Get("Mcp-Session-Id")
-	resp := s.dispatch(r.Context(), &req, sessionID)
-
-	// 初始化时下发新会话
-	if req.Method == "initialize" {
-		if id := resp.SessionID; id != "" {
-			w.Header().Set("Mcp-Session-Id", id)
-		}
-	}
-	writeRPC(w, resp)
+	return toolResult(map[string]any{"query": qs, "results": rs})
 }
 
-// dispatch 分发 JSON-RPC 请求。
-func (s *Server) dispatch(ctx context.Context, req *jsonRPC, sessionID string) *jsonRPC {
-	switch req.Method {
-	case "initialize":
-		id := newSession()
-		s.mu.Lock()
-		s.sessions[id] = time.Now()
-		s.mu.Unlock()
-		return &jsonRPC{
-			JSONRPC: "2.0", ID: req.ID, SessionID: id,
-			Result: map[string]any{
-				"protocolVersion": ProtocolVersion,
-				"serverInfo":      map[string]any{"name": "mycast-mcp", "version": "0.1.0"},
-				"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
-			},
-		}
-	case "notifications/initialized":
-		return &jsonRPC{JSONRPC: "2.0", Result: map[string]any{}}
-	case "ping":
-		return &jsonRPC{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{}}
-	case "tools/list":
-		return &jsonRPC{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"tools": tools}}
-	case "tools/call":
-		return s.callTool(ctx, req)
-	default:
-		return rpcError(req.ID, -32601, "Method not found: "+req.Method)
-	}
-}
-
-// callTool 执行 tools/call。
-func (s *Server) callTool(ctx context.Context, req *jsonRPC) *jsonRPC {
-	params, _ := req.Params.(map[string]any)
-	name, _ := params["name"].(string)
-	args, _ := params["arguments"].(map[string]any)
-
-	var out any
-	var err error
-	switch name {
-	case "search_pirate":
-		q, _ := args["query"].(string)
-		out, err = s.doSearch(ctx, q)
-	case "sniff_episodes":
-		u, _ := args["url"].(string)
-		out, err = s.doSniff(ctx, u)
-	case "cast_to_tv":
-		u, _ := args["url"].(string)
-		title, _ := args["title"].(string)
-		out, err = s.doCast(u, title)
-	default:
-		return rpcError(req.ID, -32602, "Tool not found: "+name)
-	}
-	if err != nil {
-		return &jsonRPC{JSONRPC: "2.0", ID: req.ID,
-			Result: map[string]any{"content": []map[string]any{{"type": "text", "text": err.Error()}}}}
-	}
-	b, _ := json.Marshal(out)
-	return &jsonRPC{JSONRPC: "2.0", ID: req.ID,
-		Result: map[string]any{"content": []map[string]any{{"type": "text", "text": string(b)}}}}
-}
-
-// doSearch 搜索盗版站。
-func (s *Server) doSearch(ctx context.Context, q string) (any, error) {
-	if strings.TrimSpace(q) == "" {
-		return nil, errUser("缺少关键词 query")
-	}
-	rs, err := s.Search.Search(ctx, q)
-	if err != nil {
-		return nil, err
-	}
-	return map[string]any{"query": q, "results": rs}, nil
-}
-
-// doSniff 详情页 → 集数。
-func (s *Server) doSniff(ctx context.Context, u string) (any, error) {
-	if strings.TrimSpace(u) == "" {
-		return nil, errUser("缺少详情页 URL")
+// handleSniff 详情页 → 集数。
+func (s *Server) handleSniff(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := req.GetArguments()
+	u, _ := args["url"].(string)
+	if u == "" {
+		return mcp.NewToolResultError("缺少详情页 URL"), nil
 	}
 	eps, err := s.Sniff.ExtractURL(u)
 	if err != nil {
-		return nil, err
+		return mcp.NewToolResultError(err.Error()), nil
 	}
-	return map[string]any{"url": u, "count": len(eps), "episodes": eps}, nil
+	return toolResult(map[string]any{"url": u, "count": len(eps), "episodes": eps})
 }
 
-// doCast 播放页/直链 → 拿流 → 投屏。
-func (s *Server) doCast(u, title string) (any, error) {
-	if strings.TrimSpace(u) == "" {
-		return nil, errUser("缺少播放 URL")
+// handleCast 播放页/直链 → 拿流 → 投屏。
+func (s *Server) handleCast(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := req.GetArguments()
+	u, _ := args["url"].(string)
+	title, _ := args["title"].(string)
+	if u == "" {
+		return mcp.NewToolResultError("缺少播放 URL"), nil
 	}
 	// 直链 m3u8/mp4：直接投；否则先解析播放页拿流。
 	streamURL, mime := u, ""
@@ -245,14 +119,25 @@ func (s *Server) doCast(u, title string) (any, error) {
 		var err error
 		streamURL, mime, err = s.Sniff.ResolveStream(u)
 		if err != nil {
-			return nil, err
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 	}
 	ref := refererOf(u)
-	if s.Relay != nil {
-		s.Relay.CastStream(streamURL, ref)
+	if s.Cast != nil {
+		s.Cast.CastStream(streamURL, ref)
 	}
-	return map[string]any{"ok": true, "stream_url": streamURL, "mime": mime, "referer": ref, "title": title}, nil
+	return toolResult(map[string]any{"ok": true, "stream_url": streamURL, "mime": mime, "referer": ref, "title": title})
+}
+
+// toolResult 序列化业务结果为 text 内容。
+func toolResult(v any) (*mcp.CallToolResult, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return mcp.NewToolResultError("序列化失败: " + err.Error()), nil
+	}
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{mcp.TextContent{Type: "text", Text: string(b)}},
+	}, nil
 }
 
 // isStreamURL 判断是否已是 m3u8/mp4 直链。
@@ -263,7 +148,6 @@ func isStreamURL(u string) bool {
 
 // refererOf 防盗链 referer = 来源页域名（透传，不能猜）。
 func refererOf(u string) string {
-	// 播放页 URL 的 scheme://host/ 作为 referer；直链则用其域名。
 	if i := strings.Index(u, "://"); i > 0 {
 		rest := u[i+3:]
 		if j := strings.Index(rest, "/"); j > 0 {
@@ -271,53 +155,4 @@ func refererOf(u string) string {
 		}
 	}
 	return ""
-}
-
-// ── JSON-RPC 类型 ──
-
-// jsonRPC 一个 MCP 请求（入参）或响应（出参）。
-type jsonRPC struct {
-	JSONRPC   string `json:"jsonrpc"`
-	ID        any    `json:"id,omitempty"`
-	Method    string `json:"method,omitempty"`
-	Params    any    `json:"params,omitempty"`
-	Result    any    `json:"result,omitempty"`
-	Error     *rpcErr `json:"error,omitempty"`
-	SessionID string `json:"-"` // 仅 initialize 响应下发
-}
-
-// rpcErr JSON-RPC 错误。
-type rpcErr struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-}
-
-// errUser 业务错误（包装成 text 内容返回，不报 JSON-RPC error）。
-type userErr struct{ msg string }
-
-func (e userErr) Error() string { return e.msg }
-func errUser(m string) error    { return userErr{m} }
-
-func rpcError(id any, code int, msg string) *jsonRPC {
-	return &jsonRPC{JSONRPC: "2.0", ID: id, Error: &rpcErr{Code: code, Message: msg}}
-}
-
-func writeRPC(w http.ResponseWriter, r *jsonRPC) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(r)
-}
-
-// newSession 生成会话 ID（crypto/rand 16 字节 hex）。
-func newSession() string {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return time.Now().Format("20060102150405.000000000")
-	}
-	const hex = "0123456789abcdef"
-	out := make([]byte, len(b)*2)
-	for i, v := range b {
-		out[i*2] = hex[v>>4]
-		out[i*2+1] = hex[v&0xf]
-	}
-	return string(out)
 }
