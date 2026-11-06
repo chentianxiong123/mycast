@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"mycast/internal/bili"
+	"mycast/internal/mcp"
 	"mycast/internal/media"
 	"mycast/internal/nva"
 	"mycast/internal/relay"
@@ -336,6 +337,11 @@ func New(opts Options) *Instance {
 	})
 
 	inst.Handler = logRequests(mux)
+
+	// MCP 端点（Streamable HTTP）：给 AI 暴露 search/sniff/cast 工具（老人一句话投屏）
+	mcpSrv := mcp.New(inst.Search, inst.Sniff, rl)
+	mux.Handle("/mcp", mcpSrv.Handler())
+
 	return inst
 }
 
