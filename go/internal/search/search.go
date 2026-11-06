@@ -616,3 +616,6 @@ func parseBaiduHTML(htmlText string) []Result {
 	}
 	return rs
 }
+
+// IsLegitSite 导出包装（供 server 的 Chrome 兜底路径过滤正版平台）。
+func IsLegitSite(rawURL string) bool { return isLegitSite(rawURL) }

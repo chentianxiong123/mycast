@@ -306,7 +306,15 @@ func New(opts Options) *Instance {
 		}
 		rs, err := inst.Search.Search(rq.Context(), q)
 		if err != nil {
-			// 聚合失败（验证码/空/反爬）→ 让前端走 WebView 兜底（搜索引擎 JS 渲染）
+			// 聚合失败（验证码/空/反爬）。
+			// 1) 若系统有 Chrome（桌面版）→ 自动 Chrome headless 渲染兜底（复用 Blink 内核）
+			// 2) 无 Chrome（Android App 内）→ need_browser 让前端走 WebView
+			if search.FindChrome() != "" {
+				if rendered := chromeSearchFallback(rq.Context(), q); len(rendered) > 0 {
+					writeJSON(w, map[string]any{"ok": true, "query": q, "results": rendered, "via": "chrome"})
+					return
+				}
+			}
 			writeJSON(w, map[string]any{"ok": false, "msg": err.Error(), "need_browser": true, "query": q})
 			return
 		}
@@ -533,4 +541,38 @@ func tvList() []*ssdp.Device {
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// chromeSearchFallback 桌面版兜底：系统 Chrome headless 渲染搜索引擎结果页 → 解析。
+// 依次试 360/百度/Bing（360 需登录态但 Chrome 带 cookie 上下文能过；百度 JS 渲染出真结果）。
+func chromeSearchFallback(ctx context.Context, q string) []search.Result {
+	engines := []struct {
+		name string
+		url  string
+	}{
+		{"so", "https://www.so.com/s?q=" + url.QueryEscape(q)},
+		{"baidu", "https://www.baidu.com/s?wd=" + url.QueryEscape(q)},
+		{"bing", "https://www.bing.com/search?q=" + url.QueryEscape(q)},
+	}
+	seen := map[string]bool{}
+	var all []search.Result
+	for _, eng := range engines {
+		html, err := search.RenderWithChrome(ctx, eng.url, 18*time.Second)
+		if err != nil || strings.TrimSpace(html) == "" {
+			continue
+		}
+		// 用对应引擎解析逻辑（复用 ParseRendered）
+		for _, r := range search.New(search.Default()).ParseRendered(html, eng.url, eng.name) {
+			// 只留盗版站：过滤正版平台（B站/爱奇艺/豆瓣等）——与聚合链路一致
+			if r.URL == "" || seen[r.URL] || search.IsLegitSite(r.URL) {
+				continue
+			}
+			seen[r.URL] = true
+			all = append(all, r)
+		}
+		if len(all) > 0 {
+			break // 首个出真结果的引擎够用
+		}
+	}
+	return all
 }
