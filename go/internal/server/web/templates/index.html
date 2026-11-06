@@ -341,6 +341,11 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
   <!-- ═══════════ 设置（高级嗅探 + 日志 + 关于）═══════════ -->
   <div class="page" id="page-set">
     <div class="card">
+      <h2>账号固化（搜索引擎登录态）</h2>
+      <div class="dim" style="margin-bottom:8px">登录一次自动保存，以后搜索自动带上（360 需登录态才能搜）。</div>
+      <div class="recent" id="cookie-list"><div class="dim">加载中…</div></div>
+    </div>
+    <div class="card">
       <h2>高级：粘贴链接嗅探</h2>
       <div class="sniffrow">
         <input class="inp" id="sniff-url" placeholder="粘贴盗版站详情页 URL">
@@ -376,6 +381,49 @@ function goPage(p) {
   curPage = p;
   document.querySelectorAll('.page').forEach(x => x.classList.toggle('active', x.id === 'page-'+p));
   document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x.dataset.page === p));
+  if(p === 'set') loadCookies(); // 进设置页刷新账号固化状态
+}
+
+// ── 账号固化（搜索引擎登录态 cookie 持久化）──
+const SE_ENGINES = [
+  { engine: 'so',    name: '360搜索', url: 'https://www.so.com/' },
+  { engine: 'baidu', name: '百度',    url: 'https://www.baidu.com/' },
+  { engine: 'bing',  name: 'Bing',    url: 'https://www.bing.com/' },
+];
+// 各引擎登录页（打开后用户登录，登录成功自动收集 cookie）
+const SE_LOGIN = {
+  so:    'https://passport.so.com/login',
+  baidu: 'https://passport.baidu.com/v2/?login',
+  bing:  'https://login.live.com/',
+};
+
+async function loadCookies() {
+  try {
+    const r = await fetch('/api/cookie/list');
+    const d = await r.json();
+    const eng = d.engines || {};
+    document.getElementById('cookie-list').innerHTML = SE_ENGINES.map(e=>{
+      const n = eng[e.engine] || 0;
+      return '<div class="recent-it">' +
+        '<span style="font-size:18px">🔑</span>' +
+        '<div class="recent-t"><div class="recent-title">'+e.name+'</div>' +
+        '<div class="recent-sub">'+(n>0?('✅ 已固化 '+n+' 条 cookie'):'⚠️ 未固化（登录后自动保存）')+'</div></div>' +
+        '<button class="btn gh" style="width:auto;flex-shrink:0;height:32px" onclick="loginEngine(\''+e.engine+'\')">去登录</button>' +
+        '</div>';
+    }).join('');
+  } catch(e){ document.getElementById('cookie-list').innerHTML = '<div class="dim">状态加载失败</div>'; }
+}
+
+// 触发登录：App 内打开登录页，用户登录后自动收集固化
+function loginEngine(engine) {
+  const loginURL = SE_LOGIN[engine];
+  if(!loginURL) { toast('无登录页', false); return; }
+  if(window.hc && window.hc.loginEngine) {
+    window.hc.loginEngine(engine, loginURL);
+    toast('已打开 '+engine+' 登录页，登录完自动保存');
+  } else {
+    toast('需 App 内登录（桌面版请手动复制 cookie）', false);
+  }
 }
 
 // ── toast ──
@@ -519,9 +567,40 @@ async function searchSites() {
   try {
     const r = await fetch('/api/search?q='+encodeURIComponent(q));
     const d = await r.json();
-    if(d.ok) { renderSearchRes(box, d.results||[]); toast('搜到 '+(d.results||[]).length+' 条'); }
-    else box.innerHTML = '<div class="warn">'+(d.msg||'搜索失败')+'</div>';
+    if(d.ok) { renderSearchRes(box, d.results||[]); toast('搜到 '+(d.results||[]).length+' 条'); return; }
+    // 聚合失败（验证码/空）→ WebView 渲染搜索（注入固化 cookie）
+    if(d.need_browser) { searchViaWebView(q, d.msg||''); return; }
+    box.innerHTML = '<div class="warn">'+(d.msg||'搜索失败')+'</div>';
   } catch(e) { box.innerHTML = '<div class="warn">网络错误: '+e.message+'</div>'; }
+}
+
+// 搜索引擎 WebView 兜底：逐个引擎用内置浏览器渲染（注入固化 cookie）
+function searchViaWebView(q, reason) {
+  const box = document.getElementById('search-res');
+  if(!window.hc || !window.hc.searchEngine) { box.innerHTML = '<div class="warn">纯 HTTP 搜索失败（'+reason+'），需 App 内渲染（桌面版不支持）</div>'; return; }
+  box.innerHTML = '<div class="warn">纯 HTTP 失败（'+reason+'），用内置浏览器渲染…</div>';
+  // 优先 360（需登录态，固化后最稳），失败依次 bing/baidu
+  const tries = ['so','bing','baidu'];
+  window.hc.searchEngine(tries[0], 'https://m.so.com/s?q='+encodeURIComponent(q));
+  pollSearchResult(q);
+}
+
+// 轮询 WebView 渲染后的搜索结果
+function pollSearchResult(q) {
+  let tries = 0;
+  const iv = setInterval(async ()=>{
+    tries++;
+    try {
+      const r = await fetch('/api/search/result');
+      const d = await r.json();
+      if(d.ok && d.results && d.results.length) {
+        clearInterval(iv);
+        renderSearchRes(document.getElementById('search-res'), d.results);
+        toast('渲染搜到 '+(d.results||[]).length+' 条');
+      }
+      else if(tries > 40) { clearInterval(iv); document.getElementById('search-res').innerHTML = '<div class="warn">渲染搜索超时</div>'; }
+    } catch(e) { clearInterval(iv); document.getElementById('search-res').innerHTML = '<div class="warn">轮询失败: '+e.message+'</div>'; }
+  }, 1000);
 }
 function renderSearchRes(box, rs) {
   if(!rs.length) { box.innerHTML = '<div class="warn">无结果</div>'; return; }

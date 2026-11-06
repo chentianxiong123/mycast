@@ -14,6 +14,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -52,9 +54,17 @@ type Instance struct {
 	sniffResult []sniff.Episode
 	sniffURL    string
 
+	// 搜索 WebView 兜底（搜索引擎 JS 渲染/验证码时，WebView 渲染结果页再解析）
+	searchMu     sync.Mutex
+	searchResult []search.Result
+	searchQuery  string
+
 	// 最近在看（历史记录，最多 5 条）
 	recentMu sync.Mutex
 	recent   []RecentItem
+
+	// 账号固化（cookie 持久化，登录后 WebView 注入复用）
+	Cookies *CookieStore
 }
 
 // RecentItem 一条最近播放记录（首页「最近在看」一键续看）
@@ -89,6 +99,7 @@ type Options struct {
 	AccessKey string // B站 access_key（可选）
 	UUID      string
 	Name      string
+	DataDir   string // 数据目录（cookie 持久化等；空=默认）
 }
 
 // New 组装全部 handler 并启动后台服务（SSDP 广播 + NVA TCP）。
@@ -158,6 +169,13 @@ func New(opts Options) *Instance {
 		nvaLn:   nvaLn,
 		nvaSrv:  nvaSrv,
 	}
+
+	// 账号固化存储：数据目录（HOME/data 或当前目录）
+	dataDir := opts.DataDir
+	if dataDir == "" {
+		dataDir = filepath.Join(os.Getenv("HOME"), "data")
+	}
+	inst.Cookies = NewCookieStore(dataDir)
 
 	mux := http.NewServeMux()
 	mux.Handle("/", r.Handler())
@@ -288,10 +306,98 @@ func New(opts Options) *Instance {
 		}
 		rs, err := inst.Search.Search(rq.Context(), q)
 		if err != nil {
-			writeJSON(w, map[string]any{"ok": false, "msg": err.Error()})
+			// 聚合失败（验证码/空/反爬）→ 让前端走 WebView 兜底（搜索引擎 JS 渲染）
+			writeJSON(w, map[string]any{"ok": false, "msg": err.Error(), "need_browser": true, "query": q})
 			return
 		}
 		writeJSON(w, map[string]any{"ok": true, "query": q, "results": rs})
+	})
+
+	// 搜索 WebView 兜底：JS 拿搜索引擎结果页 outerHTML → POST 回来解析（学 sniff/render）
+	mux.HandleFunc("/api/search/render", func(w http.ResponseWriter, rq *http.Request) {
+		if rq.Method != http.MethodPost {
+			writeJSON(w, map[string]any{"ok": false, "msg": "需要 POST"})
+			return
+		}
+		rq.ParseForm()
+		htmlText := rq.PostFormValue("html")
+		u := rq.PostFormValue("url")
+		q := rq.PostFormValue("query")
+		if htmlText == "" {
+			writeJSON(w, map[string]any{"ok": false, "msg": "缺少 html"})
+			return
+		}
+		// 用 search 的解析逻辑解析渲染后的 HTML（复用三引擎各自的解析器）
+		engine := "webview"
+		if u != "" {
+			if strings.Contains(u, "so.com") {
+				engine = "so"
+			} else if strings.Contains(u, "baidu") {
+				engine = "baidu"
+			} else if strings.Contains(u, "bing") {
+				engine = "bing"
+			}
+		}
+		rs := inst.Search.ParseRendered(htmlText, u, engine)
+		inst.searchMu.Lock()
+		inst.searchResult = rs
+		inst.searchQuery = q
+		inst.searchMu.Unlock()
+		writeJSON(w, map[string]any{"ok": true, "count": len(rs), "engine": engine})
+	})
+
+	// 搜索 WebView 结果（前端轮询拿）
+	mux.HandleFunc("/api/search/result", func(w http.ResponseWriter, _ *http.Request) {
+		inst.searchMu.Lock()
+		rs := inst.searchResult
+		q := inst.searchQuery
+		inst.searchResult = nil
+		inst.searchQuery = ""
+		inst.searchMu.Unlock()
+		writeJSON(w, map[string]any{"ok": true, "query": q, "results": rs})
+	})
+
+	// ── 账号固化（cookie 持久化）：登录后自动收集，WebView 搜索/嗅探时注入 ──
+
+	// 已固化引擎状态
+	mux.HandleFunc("/api/cookie/list", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, map[string]any{"ok": true, "engines": inst.Cookies.List()})
+	})
+
+	// 保存某引擎 cookie（登录完成回传）
+	mux.HandleFunc("/api/cookie/save", func(w http.ResponseWriter, rq *http.Request) {
+		engine := rq.URL.Query().Get("engine")
+		if engine == "" {
+			writeJSON(w, map[string]any{"ok": false, "msg": "缺少 engine"})
+			return
+		}
+		var cookies []CookieEntry
+		if err := json.NewDecoder(rq.Body).Decode(&cookies); err != nil {
+			writeJSON(w, map[string]any{"ok": false, "msg": "body 非 JSON: " + err.Error()})
+			return
+		}
+		if err := inst.Cookies.Save(engine, cookies); err != nil {
+			writeJSON(w, map[string]any{"ok": false, "msg": err.Error()})
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "engine": engine, "count": len(cookies)})
+	})
+
+	// 读某引擎 cookie（WebView 注入用，Android 壳搜索前取）
+	mux.HandleFunc("/api/cookie/get", func(w http.ResponseWriter, rq *http.Request) {
+		engine := rq.URL.Query().Get("engine")
+		writeJSON(w, map[string]any{"ok": true, "engine": engine, "cookies": inst.Cookies.Load(engine)})
+	})
+
+	// 清除某引擎 cookie
+	mux.HandleFunc("/api/cookie/clear", func(w http.ResponseWriter, rq *http.Request) {
+		engine := rq.URL.Query().Get("engine")
+		if engine == "" {
+			writeJSON(w, map[string]any{"ok": false, "msg": "缺少 engine"})
+			return
+		}
+		_ = inst.Cookies.Clear(engine)
+		writeJSON(w, map[string]any{"ok": true})
 	})
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, map[string]any{
