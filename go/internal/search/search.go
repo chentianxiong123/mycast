@@ -22,6 +22,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	xhtml "golang.org/x/net/html"
@@ -42,10 +43,10 @@ type Config struct {
 	Delay   time.Duration // 引擎间退避（验证码/失败时等待）
 }
 
-// Default 默认配置：手机 iPhone UA + 8s 超时 + 3s 引擎间退避。
+// Default 默认配置：桌面 Chrome UA + 8s 超时 + 3s 引擎间退避。
 func Default() Config {
 	return Config{
-		UA:      "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
+		UA:      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 		Timeout: 8 * time.Second,
 		Delay:   3 * time.Second,
 	}
@@ -55,6 +56,13 @@ func Default() Config {
 type Aggregator struct {
 	cfg Config
 	hc  *http.Client
+
+	// cookie 缓存（360/百度 预热用，SearXNG 用 EngineCache 同思路）
+	cookieMu   sync.Mutex
+	soCookie   string
+	soCookieAt time.Time
+	bdCookie   string
+	bdCookieAt time.Time
 }
 
 // New 构造聚合搜索器。
@@ -77,14 +85,20 @@ func New(cfg Config) *Aggregator {
 // Search 聚合搜索：bing → so → baidu，去重，返回结果。
 // 每个引擎失败（验证码/网络/空结果）自动换下一个；全部失败返回聚合错误。
 func (a *Aggregator) Search(ctx context.Context, query string) ([]Result, error) {
-	engines := []func(context.Context, string) ([]Result, error){
-		a.searchBing, a.search360, a.searchBaidu,
+	engines := []struct {
+		name string
+		fn   func(context.Context, string) ([]Result, error)
+	}{
+		{"bing", a.searchBing},
+		{"so", a.search360},
+		{"baidu", a.searchBaidu},
 	}
 	seen := map[string]bool{}
 	var all []Result
 	var errs []string
-	for i, fn := range engines {
-		rs, err := fn(ctx, query)
+	// 真聚合：跑完所有引擎，各自贡献，URL 去重（不再因某引擎有结果就 break）。
+	for _, eng := range engines {
+		rs, err := eng.fn(ctx, query)
 		if err != nil {
 			errs = append(errs, err.Error())
 		}
@@ -97,11 +111,8 @@ func (a *Aggregator) Search(ctx context.Context, query string) ([]Result, error)
 			seen[r.URL] = true
 			all = append(all, r)
 		}
-		// 有结果就停（避免撞反爬）；最后一个引擎不等待
-		if len(all) > 0 && i < len(engines)-1 {
-			break
-		}
-		if i < len(engines)-1 {
+		// 引擎间退避（避免撞反爬）
+		if eng.name != engines[len(engines)-1].name {
 			select {
 			case <-ctx.Done():
 				return all, ctx.Err()
@@ -109,6 +120,7 @@ func (a *Aggregator) Search(ctx context.Context, query string) ([]Result, error)
 			}
 		}
 	}
+	// 有结果则返回（可能部分引擎失败）；全失败才报错。
 	if len(all) == 0 {
 		if len(errs) > 0 {
 			return nil, errors.New(strings.Join(errs, "; "))
@@ -125,13 +137,27 @@ func (a *Aggregator) get(ctx context.Context, rawURL, referer string) (*http.Res
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", a.cfg.UA)
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.5")
+	a.applyBrowserHeaders(req)
 	if referer != "" {
 		req.Header.Set("Referer", referer)
 	}
 	return a.hc.Do(req)
+}
+
+// applyBrowserHeaders 补全完整浏览器头（模拟 Chrome，学 SearXNG 的请求构建）。
+// 关键：Sec-Fetch-*/Accept-Encoding: br/Upgrade-Insecure-Requests 让搜索引擎不识别为爬虫。
+func (a *Aggregator) applyBrowserHeaders(req *http.Request) {
+	req.Header.Set("User-Agent", a.cfg.UA)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
+	req.Header.Set("Sec-Fetch-Dest", "document")
+	req.Header.Set("Sec-Fetch-Mode", "navigate")
+	req.Header.Set("Sec-Fetch-Site", "none")
+	req.Header.Set("Sec-Fetch-User", "?1")
+	req.Header.Set("Upgrade-Insecure-Requests", "1")
+	req.Header.Set("DNT", "1")
+	req.Header.Set("Cache-Control", "max-age=0")
 }
 
 // isLegitSite 已知正版平台域名：搜盗版站时过滤掉（B站/优酷/爱奇艺/腾讯等走各自链路，不与盗版站混）。
@@ -157,22 +183,29 @@ func isLegitSite(rawURL string) bool {
 // isCaptcha 验证码/安全验证检测：命中返回 true（应换引擎）。
 func isCaptcha(body string) bool {
 	low := strings.ToLower(body)
+	// 真实验证码特征（独立词）。
 	for _, k := range []string{
-		"wappass.baidu.com", "captcha/tuxing", "百度安全验证", "安全验证",
-		"verify", "访问验证", "请输入验证码",
+		"captcha/tuxing", "百度安全验证", "请输入验证码",
+		"访问验证", "验证码验证", "百度智能云安全",
 	} {
 		if strings.Contains(low, strings.ToLower(k)) {
 			return true
 		}
 	}
+	// wappass 跳转只在指向 /verify 或 /captcha 时才是真验证码；
+	// 页面里 loginUrlPrefix / passport 登录跳转不算。
+	if strings.Contains(low, "wappass") &&
+		(strings.Contains(low, "/verify") || strings.Contains(low, "/captcha")) {
+		return true
+	}
 	return false
 }
 
-// ── Bing（最可行，直连拿直链）──
+// ── Bing（学 SearXNG：www.bing.com/search + base64url 解码）──
 
 func (a *Aggregator) searchBing(ctx context.Context, query string) ([]Result, error) {
-	u := "https://cn.bing.com/search?q=" + url.QueryEscape(query)
-	resp, err := a.get(ctx, u, "https://cn.bing.com/")
+	u := "https://www.bing.com/search?q=" + url.QueryEscape(query)
+	resp, err := a.get(ctx, u, "https://www.bing.com/")
 	if err != nil {
 		return nil, fmt.Errorf("bing: %w", err)
 	}
@@ -241,13 +274,23 @@ func bingRealURL(href string) string {
 	return string(b)
 }
 
-// ── 360（需 cookie 预热，data-mdurl 提真实 URL）──
+// ── 360（本环境 www.so.com 强制 302→m.so.com，用移动版 m.so.com + XPath 标题）──
 
 func (a *Aggregator) search360(ctx context.Context, query string) ([]Result, error) {
-	// 预热：GET so.com 首页拿 set-cookie（跨域 www→m 自动带）
-	_, _ = a.get(ctx, "https://www.so.com/", "")
-	u := "https://www.so.com/s?pn=1&q=" + url.QueryEscape(query)
-	resp, err := a.get(ctx, u, "https://www.so.com/")
+	// 预热拿 cookie（SearXNG get_cookie 思路，虽移动版也预热无害）
+	a.soCookieOrWarm(ctx)
+	// 本环境实测：www.so.com/s 永远 302→m.so.com，代码不跟重定向 → 直接用移动版
+	u := "https://m.so.com/s?q=" + url.QueryEscape(query)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, fmt.Errorf("so: %w", err)
+	}
+	a.applyBrowserHeaders(req)
+	req.Header.Set("Referer", "https://m.so.com/")
+	if c := a.soCookieOrWarm(ctx); c != "" {
+		req.Header.Set("Cookie", c)
+	}
+	resp, err := a.hc.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("so: %w", err)
 	}
@@ -259,26 +302,114 @@ func (a *Aggregator) search360(ctx context.Context, query string) ([]Result, err
 	if strings.TrimSpace(body) == "" {
 		return nil, fmt.Errorf("so: 空响应（非中国 IP / 被拦）")
 	}
-	// 移动版 m.so.com：res-list → h3.res-title/a 的 data-mdurl
-	var rs []Result
-	for _, m := range reDataMdurl.FindAllStringSubmatch(body, -1) {
-		realURL := html.UnescapeString(m[1])
-		if realURL == "" || strings.HasPrefix(realURL, "javascript") {
-			continue
-		}
-		rs = append(rs, Result{Engine: "so", URL: realURL})
+	// XPath 语义：//li[contains(@class,"res-list")] → h3.res-title/a → @data-mdurl + 标题
+	doc, err := xhtml.Parse(strings.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("so: 解析失败: %w", err)
 	}
+	var rs []Result
+	walkNodes(doc, func(n *xhtml.Node) {
+		if n.Type != xhtml.ElementNode || n.Data != "li" || !hasClass(n, "res-list") {
+			return
+		}
+		aNode, urlStr, title := findResTitleA(n)
+		if aNode == nil {
+			return
+		}
+		_ = aNode
+		if urlStr == "" || strings.HasPrefix(urlStr, "javascript") {
+			return
+		}
+		title = cleanTitle(title)
+		rs = append(rs, Result{Engine: "so", Title: title, URL: urlStr})
+	})
 	if len(rs) == 0 {
 		return nil, fmt.Errorf("so: 未提取到结果")
 	}
 	return rs, nil
 }
 
-// ── 百度（m.baidu.com 移动版，data-log JSON 的 mu 字段）──
+// soCookieOrWarm 拿 360 cookie（缓存 1h；无则预热 www.so.com 取 set-cookie）。
+func (a *Aggregator) soCookieOrWarm(ctx context.Context) string {
+	a.cookieMu.Lock()
+	defer a.cookieMu.Unlock()
+	if a.soCookie != "" && time.Since(a.soCookieAt) < time.Hour {
+		return a.soCookie
+	}
+	// 预热：GET www.so.com/ 拿 set-cookie
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.so.com/", nil)
+	if req == nil {
+		return ""
+	}
+	a.applyBrowserHeaders(req)
+	resp, err := a.hc.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	for _, c := range resp.Cookies() {
+		if c.Name != "" {
+			a.soCookie = c.Name + "=" + c.Value
+			a.soCookieAt = time.Now()
+			break
+		}
+	}
+	return a.soCookie
+}
+
+// findResTitleA 在 li.res-list 里找 h3.res-title/a，返回 (节点, data-mdurl或href, 标题)。
+func findResTitleA(n *xhtml.Node) (*xhtml.Node, string, string) {
+	var res *xhtml.Node
+	walkNodes(n, func(m *xhtml.Node) {
+		if m.Type != xhtml.ElementNode || m.Data != "a" || res != nil {
+			return
+		}
+		// 该 <a> 的父级是否 h3.res-title（或自身含 title class）
+		if parentIsResTitle(m) || hasClass(m, "title") {
+			res = m
+		}
+	})
+	if res == nil {
+		return nil, "", ""
+	}
+	// URL：@data-mdurl 优先，@href 兜底
+	urlStr := ""
+	for _, at := range res.Attr {
+		if at.Key == "data-mdurl" && at.Val != "" {
+			urlStr = at.Val
+		}
+	}
+	if urlStr == "" {
+		for _, at := range res.Attr {
+			if at.Key == "href" {
+				urlStr = at.Val
+			}
+		}
+	}
+	urlStr = html.UnescapeString(urlStr)
+	return res, urlStr, textOf(res)
+}
+
+// parentIsResTitle 判断节点的父级是否 h3 且含 res-title class。
+func parentIsResTitle(n *xhtml.Node) bool {
+	if n.Parent == nil || n.Parent.Data != "h3" {
+		return false
+	}
+	return hasClass(n.Parent, "res-title")
+}
+
+// ── 百度（本环境 www.baidu.com tn=json 必 302 验证码，改用移动版 m.baidu.com + data-log）──
 
 func (a *Aggregator) searchBaidu(ctx context.Context, query string) ([]Result, error) {
+	// 移动版 m.baidu.com/s（实测 200，data-log 的 mu 有结果；www tn=json 被验证码拦）
 	u := "https://m.baidu.com/s?word=" + url.QueryEscape(query)
-	resp, err := a.get(ctx, u, "https://m.baidu.com/")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, fmt.Errorf("baidu: %w", err)
+	}
+	a.applyBrowserHeaders(req)
+	req.Header.Set("Referer", "https://m.baidu.com/")
+	resp, err := a.hc.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("baidu: %w", err)
 	}
@@ -290,14 +421,14 @@ func (a *Aggregator) searchBaidu(ctx context.Context, query string) ([]Result, e
 	if isCaptcha(body) {
 		return nil, fmt.Errorf("baidu: 触发安全验证")
 	}
-	// cosc 卡片：data-log='{...,"mu":"真实URL"}' → mu
+	// data-log='{"mu":"真实URL"}' → mu（兼容单引号），title 从附近 <a> 提取
 	var rs []Result
 	for _, m := range reDataLog.FindAllStringSubmatch(body, -1) {
-		mu, title := baiduMu(m[1])
+		mu := baiduMu(m[1])
 		if mu == "" || strings.HasPrefix(mu, "javascript") {
 			continue
 		}
-		rs = append(rs, Result{Engine: "baidu", Title: title, URL: mu})
+		rs = append(rs, Result{Engine: "baidu", URL: mu})
 	}
 	if len(rs) == 0 {
 		return nil, fmt.Errorf("baidu: 未提取到结果")
@@ -305,23 +436,25 @@ func (a *Aggregator) searchBaidu(ctx context.Context, query string) ([]Result, e
 	return rs, nil
 }
 
-// baiduMu 解析 data-log 属性 JSON，取 mu（真实 URL）与附近标题。
-func baiduMu(raw string) (mu, title string) {
+// baiduMu 从 data-log JSON 取 mu（真实 URL）。
+func baiduMu(raw string) string {
 	decoded := html.UnescapeString(raw)
 	var obj struct {
 		Mu string `json:"mu"`
 	}
 	if err := json.Unmarshal([]byte(decoded), &obj); err != nil {
-		return "", ""
+		return ""
 	}
-	return obj.Mu, ""
+	return obj.Mu
 }
 
 // ── 工具 ──
 
 var (
-	reDataMdurl = regexp.MustCompile(`data-mdurl="([^"]+)"`)
-	reDataLog   = regexp.MustCompile(`data-log="([^"]*mu[^"]*)"`)
+	// 百度 data-log：兼容单引号 data-log='{"mu":...}'（移动版用单引号）
+	reDataLog = regexp.MustCompile(`data-log=['"]([^'"]*mu[^'"]*)['"]`)
+	// bing 结果项（已用 XPath 遍历，正则保留备查）
+	reTag = regexp.MustCompile(`<[^>]+>`)
 )
 
 // hasClass 判断节点是否含指定 class。
@@ -380,4 +513,106 @@ func readBody(resp *http.Response) string {
 		}
 	}
 	return string(buf)
+}
+
+// ParseRendered 解析 WebView 渲染后的搜索引擎结果页 HTML。
+// 搜索引擎（百度移动版等）纯 HTTP 拿空壳，WebView JS 渲染后出真结果；
+// 这里复用三引擎各自的解析逻辑，按来源引擎分派。
+// 参数：
+//   htmlText: WebView 回传的 outerHTML
+//   pageURL:  渲染的页面 URL（判断引擎）
+//   engine:   已判定的引擎（bing/so/baidu/webview）
+func (a *Aggregator) ParseRendered(htmlText, pageURL, engine string) []Result {
+	if strings.TrimSpace(htmlText) == "" {
+		return nil
+	}
+	// 按引擎分派解析（复用各自逻辑）
+	switch engine {
+	case "so":
+		return parseSoHTML(htmlText)
+	case "baidu":
+		return parseBaiduHTML(htmlText)
+	case "bing":
+		return parseBingHTML(htmlText)
+	default:
+		// 未知引擎：尝试全部解析器，去重合并
+		seen := map[string]bool{}
+		var out []Result
+		for _, rs := range [][]Result{
+			parseBingHTML(htmlText), parseSoHTML(htmlText), parseBaiduHTML(htmlText),
+		} {
+			for _, r := range rs {
+				if r.URL == "" || seen[r.URL] || isLegitSite(r.URL) {
+					continue
+				}
+				seen[r.URL] = true
+				out = append(out, r)
+			}
+		}
+		return out
+	}
+}
+
+// parseBingHTML 解析 bing 结果页 HTML（li.b_algo → h2/a）。
+func parseBingHTML(htmlText string) []Result {
+	doc, err := xhtml.Parse(strings.NewReader(htmlText))
+	if err != nil {
+		return nil
+	}
+	var rs []Result
+	walkNodes(doc, func(n *xhtml.Node) {
+		if n.Type != xhtml.ElementNode || n.Data != "li" || !hasClass(n, "b_algo") {
+			return
+		}
+		title, href := "", ""
+		walkNodes(n, func(m *xhtml.Node) {
+			if m.Type == xhtml.ElementNode && m.Data == "a" && href == "" {
+				for _, at := range m.Attr {
+					if at.Key == "href" {
+						href = at.Val
+					}
+				}
+				title = strings.TrimSpace(textOf(m))
+			}
+		})
+		href = bingRealURL(href)
+		title = cleanTitle(title)
+		if title != "" && href != "" {
+			rs = append(rs, Result{Engine: "bing", Title: title, URL: href})
+		}
+	})
+	return rs
+}
+
+// parseSoHTML 解析 360 结果页 HTML（li.res-list → h3.res-title/a → data-mdurl + 标题）。
+func parseSoHTML(htmlText string) []Result {
+	doc, err := xhtml.Parse(strings.NewReader(htmlText))
+	if err != nil {
+		return nil
+	}
+	var rs []Result
+	walkNodes(doc, func(n *xhtml.Node) {
+		if n.Type != xhtml.ElementNode || n.Data != "li" || !hasClass(n, "res-list") {
+			return
+		}
+		_, urlStr, title := findResTitleA(n)
+		if urlStr == "" || strings.HasPrefix(urlStr, "javascript") {
+			return
+		}
+		rs = append(rs, Result{Engine: "so", Title: cleanTitle(title), URL: urlStr})
+	})
+	return rs
+}
+
+// parseBaiduHTML 解析百度结果页 HTML（data-log 的 mu 字段）。
+func parseBaiduHTML(htmlText string) []Result {
+	var rs []Result
+	for _, m := range reDataLog.FindAllStringSubmatch(htmlText, -1) {
+		mu := baiduMu(m[1])
+		if mu == "" || strings.HasPrefix(mu, "javascript") {
+			continue
+		}
+		rs = append(rs, Result{Engine: "baidu", URL: mu})
+	}
+	return rs
 }

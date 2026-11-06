@@ -37,16 +37,3 @@ func TestIsCaptcha(t *testing.T) {
 		}
 	}
 }
-
-func TestBaiduMu(t *testing.T) {
-	// data-log 属性里 JSON 的引号被 HTML 实体转义（&quot;）
-	raw := `{"commonLog":{"clkInfo":{"urlsign":"123"}},"mu":"http://www.szkbg.com/p/25702-1-1.html"}`
-	mu, _ := baiduMu(raw)
-	if mu != "http://www.szkbg.com/p/25702-1-1.html" {
-		t.Errorf("mu 解析错误: got=%q", mu)
-	}
-	// 无 mu 返回空
-	if mu, _ := baiduMu(`{"commonLog":{}}`); mu != "" {
-		t.Errorf("无 mu 应返回空: %q", mu)
-	}
-}
