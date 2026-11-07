@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>MyCast</title>
 <link rel="icon" href="data:,">
+<script src="/static/hls.min.js"></script>
 <style>
 :root{
   --bg:#0a0b0e;--bg2:#0f1118;--card:#141720;--card2:#1a1e2a;
@@ -252,6 +253,13 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
 .detail-bar .btn{flex:1;height:42px;border-radius:10px;font-size:14px}
 .detail-close-btn{background:var(--card2);color:var(--dim)}
 .detail-play-btn:disabled{opacity:.4}
+
+/* ═══════════ 内置播放器（学 OnScreen watch）═══ */
+.player-overlay{position:fixed;inset:0;z-index:80;background:#000;display:flex;flex-direction:column}
+#player-video{flex:1;width:100%;height:100%;object-fit:contain;background:#000}
+.player-bar{position:absolute;top:0;left:0;right:0;display:flex;align-items:center;gap:10px;padding:10px 14px;background:linear-gradient(transparent,#000 30%);z-index:81}
+.player-title{flex:1;color:#fff;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.player-close{width:36px;height:36px;border:none;border-radius:50%;background:rgba(255,255,255,.15);color:#fff;font-size:16px}
 </style>
 </head>
 <body>
@@ -425,7 +433,17 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
   </div>
   <div class="detail-bar">
     <button class="btn pri detail-close-btn" onclick="closeDetail()">关闭</button>
-    <button class="btn gh detail-play-btn" id="detail-play" onclick="playEp()" disabled>▶ 播放</button>
+    <button class="btn gh detail-play-btn" id="detail-local" onclick="playEpLocal()" disabled>📱 本地播放</button>
+    <button class="btn gh detail-play-btn" id="detail-play" onclick="playEp()" disabled>▶ 投屏</button>
+  </div>
+</div>
+
+<!-- ═══════════ 内置播放器（学 OnScreen watch：全屏 video + hls.js 播 m3u8）═══ -->
+<div id="player-overlay" class="player-overlay hidden">
+  <video id="player-video" controls playsinline></video>
+  <div class="player-bar">
+    <div class="player-title" id="player-title">…</div>
+    <button class="player-close" onclick="closePlayer()">✕</button>
   </div>
 </div>
 
@@ -595,6 +613,7 @@ function openDetail(url, title) {
   document.getElementById('detail-meta').textContent = '提取集数中…';
   document.getElementById('detail-eps').innerHTML = '';
   document.getElementById('detail-play').disabled = true;
+  document.getElementById('detail-local').disabled = true;
   selEp = null;
   // 嗅探流媒体源集数
   loadDetail(url, title);
@@ -632,11 +651,49 @@ function selectDetailEp(index) {
   selEp = ep;
   document.querySelectorAll('.detail-ep').forEach(x=>x.classList.toggle('sel', x.id==='dep-'+index));
   document.getElementById('detail-play').disabled = false;
+  document.getElementById('detail-local').disabled = false;
 }
 
 function closeDetail() {
   document.getElementById('detail-overlay').classList.add('hidden');
   selEp = null;
+}
+
+// ═══════════ 内置播放器（本地也能播：mp4 直接，m3u8 用 hls.js）═══
+let hls = null;
+function playLocal(url, mime, title) {
+  if(!url) { toast('无播放地址', false); return; }
+  const ov = document.getElementById('player-overlay');
+  const v = document.getElementById('player-video');
+  ov.classList.remove('hidden');
+  document.getElementById('player-title').textContent = title || '本地播放';
+  // 销毁旧 hls
+  if(hls) { hls.destroy(); hls = null; }
+  const isHLS = (mime||'').indexOf('mpegurl')>=0 || (mime||'').indexOf('m3u8')>=0 || /\.m3u8/.test(url);
+  if(isHLS) {
+    // m3u8：需要 hls.js（浏览器原生 <video> 不播 m3u8）
+    if(window.Hls && Hls.isSupported()) {
+      hls = new Hls();
+      hls.loadSource(url);
+      hls.attachMedia(v);
+      hls.on(Hls.Events.MANIFEST_PARSED, ()=>{ v.play().catch(()=>{}); });
+    } else if(v.canPlayType('application/vnd.apple.mpegurl')) {
+      v.src = url; v.play().catch(()=>{});
+    } else {
+      toast('需 hls.js 播 m3u8（请确认 /static/hls.min.js 加载）', false);
+    }
+  } else {
+    // mp4/直链：直接播
+    v.src = url;
+    v.play().catch(()=>{});
+  }
+}
+
+function closePlayer() {
+  const v = document.getElementById('player-video');
+  if(hls) { hls.destroy(); hls = null; }
+  v.pause(); v.src = '';
+  document.getElementById('player-overlay').classList.add('hidden');
 }
 function epLoading(msg) {
   document.getElementById('ep-card').classList.remove('hidden');
@@ -702,6 +759,22 @@ function playEp() {
     .then(r=>r.json())
     .then(d=>{
       if(d.ok) { toast('已投屏第'+selEp.index+'集'); closeDetail(); goPage('dock'); loadRecent(); }
+      else toast(d.msg||'拿流失败', false);
+    })
+    .catch(e=>toast('错误: '+e.message, false));
+}
+
+// 本地播放（内置播放器）：拿流 → 播放器里播（mp4 直接 / m3u8 用 hls.js）
+function playEpLocal() {
+  if(!selEp) return;
+  const dt = document.getElementById('detail-title');
+  const base = (dt && dt.textContent && dt.textContent!=='…') ? dt.textContent : (document.getElementById('ep-title').textContent || '剧集');
+  const title = String(base).replace(/\d+集夹$/, '') + ' 第'+selEp.index+'集';
+  toast('拿流中…');
+  fetch('/api/cast?url='+encodeURIComponent(selEp.url)+'&title='+encodeURIComponent(title))
+    .then(r=>r.json())
+    .then(d=>{
+      if(d.ok) { playLocal(d.url, d.mime, title); }
       else toast(d.msg||'拿流失败', false);
     })
     .catch(e=>toast('错误: '+e.message, false));
