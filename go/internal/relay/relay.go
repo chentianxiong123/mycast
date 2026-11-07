@@ -1,4 +1,6 @@
-// Package relay 编排层：接住 B站 投屏 → 取流 → 本地重封装 → 推给电视。
+// Package relay 编排层：拿流 → 本地重封装 → 推给电视（DLNA 推电视 = 主要功能）。
+// 已砍 DLNA 中继（接收 B站 App 投屏再转发）：B站看片有更好的方法（直接拿流），
+// 不依赖手机当中继。renderer（接收端）/nva（B站投屏协议）已移除。
 package relay
 
 import (
@@ -15,17 +17,18 @@ import (
 
 	"mycast/internal/bili"
 	"mycast/internal/media"
-	"mycast/internal/renderer"
 	"mycast/internal/ssdp"
 	"mycast/internal/tv"
 )
 
 // Relay 编排器
+//
+// 职责：拿流（B站/盗版站）→ 本地重封装 → 推给电视。
+// 已不接收 B站 App 投屏（renderer/nva 已删，中继功能移除）。
 type Relay struct {
-	renderer *renderer.Renderer
-	media    *media.Server
-	bili     *bili.Client
-	BaseURL  string
+	media   *media.Server
+	bili    *bili.Client
+	BaseURL string
 
 	mu      sync.Mutex
 	mode    media.Mode
@@ -46,12 +49,9 @@ type Relay struct {
 }
 
 // New 创建编排器
-func New(r *renderer.Renderer, m *media.Server, b *bili.Client, baseURL string) *Relay {
+func New(m *media.Server, b *bili.Client, baseURL string) *Relay {
 	// 面向普通用户：只有一个「自动」模式，由后端根据上游流自动决定处理方式
-	rl := &Relay{renderer: r, media: m, bili: b, BaseURL: baseURL, mode: media.ModeAuto}
-	// 订阅渲染端事件
-	r.SetEventFn(rl.onRendererEvent)
-	return rl
+	return &Relay{media: m, bili: b, BaseURL: baseURL, mode: media.ModeAuto}
 }
 
 // Logf 记一条日志（供 server 层调用）
@@ -223,70 +223,6 @@ func refererCandidates(upstreamURL, appReferer string) []string {
 }
 
 // onRendererEvent 渲染端事件回调
-func (rl *Relay) onRendererEvent(e renderer.Event) {
-	switch e.Type {
-	case "uri":
-		rl.logf("收到 B站 投屏 URL(完整): %s", e.URI)
-		rl.logf("  结构: %s", analyzeBiliURL(e.URI))
-		rl.mu.Lock()
-		rl.curURL = e.URI
-		rl.mu.Unlock()
-		rl.startRelay(e.URI, e.Meta, 0, e.Referer, e.UA)
-	case "play":
-		rl.logf("B站 下发 Play")
-		rl.controlTV("play", "", 0)
-	case "pause":
-		rl.logf("B站 下发 Pause")
-		rl.controlTV("pause", "", 0)
-	case "stop":
-		rl.logf("B站 下发 Stop")
-		rl.stopRelay(true)
-	case "seek":
-		rl.logf("B站 Seek -> %s", e.Pos)
-		rl.controlTV("seek", e.Pos, 0)
-	case "volume":
-		rl.logf("B站 SetVolume -> %d", e.Vol)
-		rl.controlTV("volume", "", e.Vol)
-	}
-}
-
-// HandleNVACmd NVA 协议命令回调（B站 极速/哔哩必连 模式）
-func (rl *Relay) HandleNVACmd(name string, args map[string]any) (map[string]any, error) {
-	rl.logf("NVA 命令: %s", name)
-	switch name {
-	case "Play":
-		aid, _ := args["aid"].(string)
-		cid, _ := args["cid"].(string)
-		rl.logf("  Play aid=%s cid=%s", aid, cid)
-		rl.startRelayByCID(aid, cid)
-	case "PlayUrl":
-		u, _ := args["url"].(string)
-		// 记录完整 CDN URL + 是否含 aid/cid（用于确认 B站投屏结构，定续期反查方案）
-		rl.logf("  PlayUrl(完整): %s", u)
-		rl.logf("  PlayUrl 结构: %s", analyzeBiliURL(u))
-		rl.startRelay(u, "", 0, "", "")
-	case "Pause":
-		rl.controlTV("pause", "", 0)
-	case "Resume":
-		rl.controlTV("play", "", 0)
-	case "Stop":
-		rl.stopRelay(true)
-	case "Seek":
-		if v, ok := args["seekTs"].(float64); ok {
-			rl.controlTV("seek", fmtFloat(v), 0)
-		}
-	case "SwitchQn":
-		rl.logf("  切清晰度（暂不处理）")
-	case "SwitchSpeed":
-		rl.logf("  倍速（暂不处理）")
-	case "GetVolume":
-		return map[string]any{"volume": 50}, nil
-	case "SetVolume":
-		return nil, nil
-	}
-	return nil, nil
-}
-
 func (rl *Relay) controlTV(action, target string, volume int) {
 	rl.mu.Lock()
 	ctrl := rl.ctrl

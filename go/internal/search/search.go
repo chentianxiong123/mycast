@@ -57,6 +57,11 @@ type Aggregator struct {
 	cfg Config
 	hc  *http.Client
 
+	// CookieFn 持久化 cookie 提供者（账号固化 cookies/<engine>.json）。
+	// 最稳的方式：带真实登录态 cookie 纯 HTTP 请求（像真人），WebView 仅兜底。
+	// server 层注入 inst.Cookies.HeaderString（engine → cookie header）。
+	CookieFn func(engine string) string
+
 	// cookie 缓存（360/百度 预热用，SearXNG 用 EngineCache 同思路）
 	cookieMu   sync.Mutex
 	soCookie   string
@@ -150,7 +155,9 @@ func (a *Aggregator) applyBrowserHeaders(req *http.Request) {
 	req.Header.Set("User-Agent", a.cfg.UA)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
+	// 不显式设 Accept-Encoding：Go http.Transport 只在未设时自动加 gzip + 自动解压。
+	// 显式设（如 "gzip, deflate" 或含 br）→ Go 不解压 → 拿压缩字节解析失败（152KB 无 res-list）。
+	// 删掉后 Go 自动 gzip + 解压 → 360 正常出 594KB 8 res-list。
 	req.Header.Set("Sec-Fetch-Dest", "document")
 	req.Header.Set("Sec-Fetch-Mode", "navigate")
 	req.Header.Set("Sec-Fetch-Site", "none")
@@ -277,18 +284,24 @@ func bingRealURL(href string) string {
 // ── 360（本环境 www.so.com 强制 302→m.so.com，用移动版 m.so.com + XPath 标题）──
 
 func (a *Aggregator) search360(ctx context.Context, query string) ([]Result, error) {
-	// 预热拿 cookie（SearXNG get_cookie 思路，虽移动版也预热无害）
+	// 预热拿 cookie（SearXNG get_cookie 思路）
 	a.soCookieOrWarm(ctx)
-	// 本环境实测：www.so.com/s 永远 302→m.so.com，代码不跟重定向 → 直接用移动版
-	u := "https://m.so.com/s?q=" + url.QueryEscape(query)
+	// 实测：m.so.com 302（手机 UA/移动版反爬），www.so.com + 桌面 UA 200 出真结果。
+	// 手机「很容易验证码 360」根因 = 360 对移动端点/UA 302→验证码，桌面端点+桌面 UA 正常。
+	u := "https://www.so.com/s?q=" + url.QueryEscape(query)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("so: %w", err)
 	}
 	a.applyBrowserHeaders(req)
-	req.Header.Set("Referer", "https://m.so.com/")
-	if c := a.soCookieOrWarm(ctx); c != "" {
-		req.Header.Set("Cookie", c)
+	req.Header.Set("Referer", "https://www.so.com/")
+	// 只注入持久化账号固化 cookie（真实登录态，最稳——像真人）；
+	// 不注入临时预热 cookie：实测 360 对临时 cookie 返回 152KB 无 res-list（识别为异常），
+	// 无 cookie 反而 200 出 8 个 res-list。真实登录态 cookie 才稳（用户验证）。
+	if a.CookieFn != nil {
+		if c := a.CookieFn("so"); c != "" {
+			req.Header.Set("Cookie", c)
+		}
 	}
 	resp, err := a.hc.Do(req)
 	if err != nil {
@@ -409,6 +422,12 @@ func (a *Aggregator) searchBaidu(ctx context.Context, query string) ([]Result, e
 	}
 	a.applyBrowserHeaders(req)
 	req.Header.Set("Referer", "https://m.baidu.com/")
+	// 持久化账号固化 cookie 优先（百度验证码 wappass 需 cookie 态）
+	if a.CookieFn != nil {
+		if c := a.CookieFn("baidu"); c != "" {
+			req.Header.Set("Cookie", c)
+		}
+	}
 	resp, err := a.hc.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("baidu: %w", err)

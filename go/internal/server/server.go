@@ -12,7 +12,6 @@ import (
 	"html/template"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -24,9 +23,7 @@ import (
 	"mycast/internal/bili"
 	"mycast/internal/mcp"
 	"mycast/internal/media"
-	"mycast/internal/nva"
 	"mycast/internal/relay"
-	"mycast/internal/renderer"
 	"mycast/internal/search"
 	"mycast/internal/sniff"
 	"mycast/internal/ssdp"
@@ -48,10 +45,6 @@ type Instance struct {
 	Relay   *relay.Relay
 	Sniff   *sniff.Extractor
 	Search  *search.Aggregator
-	ad      *ssdp.Advertiser
-	nvaLn   net.Listener
-	nvaSrv  *nva.Server
-	stopFn  func()
 
 	// WebView 兜底回传结果（JS 拿 outerHTML → POST /api/sniff/render → 这里存）
 	sniffMu     sync.Mutex
@@ -120,24 +113,8 @@ func New(opts Options) *Instance {
 	if ip == "" {
 		ip = ssdp.LocalIP()
 	}
-	uuid := opts.UUID
-	if uuid == "" {
-		uuid = newUUID()
-	}
-	name := opts.Name
-	if name == "" {
-		name = "MyCast"
-	}
 
 	baseURL := fmt.Sprintf("http://%s:%s", ip, port)
-
-	// 渲染端（接收 B站 投屏）
-	r := renderer.New(baseURL, uuid, name, renderer.Services{
-		AVTransport:   true,
-		RenderingCtrl: true,
-		ConnMgr:       true,
-		BiliNirvana:   true,
-	})
 
 	// 媒体服务器（本地重封装喂电视）
 	ms := media.NewServer(baseURL)
@@ -145,48 +122,30 @@ func New(opts Options) *Instance {
 	// B站 playurl 客户端
 	b := bili.New(opts.AccessKey)
 
-	// 编排器
-	rl := relay.New(r, ms, b, baseURL)
-
-	// SSDP 广播自己（让 B站 App 搜到）
-	ad := ssdp.NewAdvertiser(uuid, name, baseURL+"/description.xml",
-		"urn:schemas-upnp-org:service:NirvanaControl:3")
-	if err := ad.Start(); err != nil {
-		log.Printf("[ssdp] advertise failed: %v", err)
-	}
-
-	// NVA（哔哩必连）TCP 服务，端口 9958
-	nvaSrv := nva.NewServer(func(cmd nva.Command) (map[string]any, error) {
-		return rl.HandleNVACmd(cmd.Name, cmd.Args)
-	})
-	nvaLn, err := net.Listen("tcp", ":9958")
-	if err == nil {
-		go nvaSrv.Serve(nvaLn)
-		log.Printf("[nva] listening on :9958")
-	} else {
-		log.Printf("[nva] port busy, skip: %v", err)
-	}
-
-	inst := &Instance{
-		BaseURL: baseURL,
-		Relay:   rl,
-		Sniff:   sniff.New(sniff.Default()),
-		Search:  search.New(search.Default()),
-		ad:      ad,
-		nvaLn:   nvaLn,
-		nvaSrv:  nvaSrv,
-	}
+	// 编排器（拿流→推电视；已不接收 B站 App 投屏）
+	rl := relay.New(ms, b, baseURL)
 
 	// 账号固化存储：数据目录（HOME/data 或当前目录）
 	dataDir := opts.DataDir
 	if dataDir == "" {
 		dataDir = filepath.Join(os.Getenv("HOME"), "data")
 	}
+	inst := &Instance{
+		BaseURL: baseURL,
+		Relay:   rl,
+		Sniff:   sniff.New(sniff.Default()),
+	}
+	// 搜索聚合器：注入持久化 cookie 提供者（最稳：真实登录态 cookie 纯 HTTP，WebView 仅兜底）
+	inst.Search = search.New(search.Default())
 	inst.Cookies = NewCookieStore(dataDir)
+	inst.Search.CookieFn = inst.Cookies.HeaderString
 	inst.Library = NewLibrary(dataDir)
 
 	mux := http.NewServeMux()
-	mux.Handle("/", r.Handler())
+	// 根路径重定向 /ui（已砍 renderer 的 DLNA 接收端，根路径无设备描述）
+	mux.HandleFunc("/", func(w http.ResponseWriter, rq *http.Request) {
+		http.Redirect(w, rq, "/ui", http.StatusFound)
+	})
 	mux.Handle("/m/", ms.Handler())
 	mux.HandleFunc("/favicon.ico", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
@@ -316,17 +275,14 @@ func New(opts Options) *Instance {
 			writeJSON(w, map[string]any{"ok": false, "msg": "缺少关键词"})
 			return
 		}
+		// 用户决策：搜索引擎用浏览器渲染（fetch 被反爬：Accept-Encoding 不解压/验证码/UA 坑）。
+		// 浏览器优先（稳），fetch 后备（浏览器不可用时）。
+		if brs, _, berr := inst.Search.BrowserSearch(rq.Context(), q); len(brs) > 0 && berr == nil {
+			writeJSON(w, map[string]any{"ok": true, "query": q, "results": brs, "via": "browser"})
+			return
+		}
 		rs, err := inst.Search.Search(rq.Context(), q)
 		if err != nil {
-			// 聚合失败（验证码/空/反爬）。
-			// 1) 若系统有 Chrome（桌面版）→ 自动 Chrome headless 渲染兜底（复用 Blink 内核）
-			// 2) 无 Chrome（Android App 内）→ need_browser 让前端走 WebView
-			if search.FindChrome() != "" {
-				if rendered := chromeSearchFallback(rq.Context(), q); len(rendered) > 0 {
-					writeJSON(w, map[string]any{"ok": true, "query": q, "results": rendered, "via": "chrome"})
-					return
-				}
-			}
 			writeJSON(w, map[string]any{"ok": false, "msg": err.Error(), "need_browser": true, "query": q})
 			return
 		}
@@ -550,15 +506,8 @@ func newUUID() string {
 	return fmt.Sprintf("uuid:%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
-// Stop 停后台服务
-func (inst *Instance) Stop() {
-	if inst.ad != nil {
-		inst.ad.Stop()
-	}
-	if inst.nvaLn != nil {
-		inst.nvaLn.Close()
-	}
-}
+// Stop 停后台服务（已砍 DLNA 中继：无 ad/nva 可停）
+func (inst *Instance) Stop() {}
 
 // tvList 扫描电视（每 5 秒缓存）
 var lastScan time.Time
@@ -626,36 +575,3 @@ func (inst *Instance) posterProxy(w http.ResponseWriter, rq *http.Request) {
 	_, _ = io.Copy(w, resp.Body)
 }
 
-// chromeSearchFallback 桌面版兜底：系统 Chrome headless 渲染搜索引擎结果页 → 解析。
-// 依次试 360/百度/Bing（360 需登录态但 Chrome 带 cookie 上下文能过；百度 JS 渲染出真结果）。
-func chromeSearchFallback(ctx context.Context, q string) []search.Result {
-	engines := []struct {
-		name string
-		url  string
-	}{
-		{"so", "https://www.so.com/s?q=" + url.QueryEscape(q)},
-		{"baidu", "https://www.baidu.com/s?wd=" + url.QueryEscape(q)},
-		{"bing", "https://www.bing.com/search?q=" + url.QueryEscape(q)},
-	}
-	seen := map[string]bool{}
-	var all []search.Result
-	for _, eng := range engines {
-		html, err := search.RenderWithChrome(ctx, eng.url, 18*time.Second)
-		if err != nil || strings.TrimSpace(html) == "" {
-			continue
-		}
-		// 用对应引擎解析逻辑（复用 ParseRendered）
-		for _, r := range search.New(search.Default()).ParseRendered(html, eng.url, eng.name) {
-			// 只留盗版站：过滤正版平台（B站/爱奇艺/豆瓣等）——与聚合链路一致
-			if r.URL == "" || seen[r.URL] || search.IsLegitSite(r.URL) {
-				continue
-			}
-			seen[r.URL] = true
-			all = append(all, r)
-		}
-		if len(all) > 0 {
-			break // 首个出真结果的引擎够用
-		}
-	}
-	return all
-}
