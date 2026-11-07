@@ -12,6 +12,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -47,14 +48,34 @@ func CaptureLog() {
 // Logger 取独立 logger（各包 log.Printf 改用 logger.Printf）。
 func Logger() *log.Logger { return captureLogger }
 
-// Log 记一条日志（独立文件，不影响全局）。
-func Log(format string, args ...any) { captureLogger.Printf(format, args...) }
+// 日志等级（前缀标记，/api/logs?level= 过滤）。
+const (
+	LInfo  = "INFO"
+	LWarn  = "WARN"
+	LError = "ERROR"
+)
 
-// Logf 同上（别名，调用方少写一个词）。
-func Logf(format string, args ...any) { captureLogger.Printf(format, args...) }
+// Log 记一条 INFO 日志。
+func Log(format string, args ...any) { logLevel(LInfo, format, args...) }
 
-// ReadLog 读日志文件最后 n 行（n<=0=全读，最多 500 行）。
-func ReadLog(n int) []string {
+// Logf 同上（别名）。
+func Logf(format string, args ...any) { logLevel(LInfo, format, args...) }
+
+// LogInfo 记 INFO 级日志。
+func LogInfo(format string, args ...any) { logLevel(LInfo, format, args...) }
+
+// LogWarn 记 WARN 级日志。
+func LogWarn(format string, args ...any) { logLevel(LWarn, format, args...) }
+
+// LogError 记 ERROR 级日志。
+func LogError(format string, args ...any) { logLevel(LError, format, args...) }
+
+func logLevel(level, format string, args ...any) {
+	captureLogger.Printf("["+level+"] "+format, args...)
+}
+
+// ReadLog 读日志文件最后 n 行（n<=0=全读，最多 500 行），level 非空则过滤等级。
+func ReadLog(n int, level string) []string {
 	if logFile == "" {
 		return nil
 	}
@@ -63,6 +84,16 @@ func ReadLog(n int) []string {
 		return nil
 	}
 	lines := splitLines(string(data))
+	// 等级过滤（[INFO]/[WARN]/[ERROR] 前缀）
+	if level != "" {
+		var f []string
+		for _, l := range lines {
+			if strings.Contains(l, "["+level+"]") {
+				f = append(f, l)
+			}
+		}
+		lines = f
+	}
 	max := 500
 	if len(lines) > max {
 		lines = lines[len(lines)-max:]
