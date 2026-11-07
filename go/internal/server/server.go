@@ -35,6 +35,9 @@ import (
 //go:embed web/templates/*.html
 var tplFS embed.FS
 
+//go:embed web/static/hls.min.js
+var hlsJS []byte
+
 // Port 默认端口
 const Port = "8080"
 
@@ -490,6 +493,13 @@ func New(opts Options) *Instance {
 	})
 
 	inst.Handler = logRequests(mux)
+
+	// 内置播放器依赖：hls.js（内嵌，播 m3u8；浏览器原生 <video> 不播 m3u8）
+	mux.HandleFunc("/static/hls.min.js", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/javascript")
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		_, _ = w.Write(hlsJS)
+	})
 
 	// MCP 端点（Streamable HTTP）：给 AI 暴露 search/sniff/cast 工具（老人一句话投屏）
 	mcpSrv := mcp.New(inst.Search, inst.Sniff, rl)
