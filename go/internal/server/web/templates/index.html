@@ -78,6 +78,14 @@ body{
 .big-inp{height:46px;font-size:15px;border-radius:12px}
 .big-btn{height:46px;font-size:14px;padding:0 22px;border-radius:12px}
 .big-search{font-size:19px;padding:16px;border-radius:14px;margin:4px 0 8px}
+/* push 子页（嵌套导航：点搜索结果 → 集数全屏推入，返回回搜索）*/
+.subpage{position:fixed;inset:0;z-index:70;background:#111014;overflow-y:auto;padding:12px;box-sizing:border-box}
+.sub-top{display:flex;align-items:center;gap:10px;margin-bottom:14px;position:sticky;top:0;background:#111014;padding:8px 0;z-index:2;border-bottom:1px solid #2a2a30}
+.sub-back{width:auto;padding:0 16px;height:38px;font-size:15px;margin:0}
+.sub-top .ep-title{font-weight:600;font-size:15px;color:#eee}
+.sub-top .ep-total{color:#888;font-size:13px;margin-left:auto}
+.ep-actions3 .btn{font-size:12px;padding:0 8px}
+
 .hero-sub{text-align:center;font-size:13px;margin-top:4px}
 
 .banner{margin-bottom:10px}
@@ -277,8 +285,8 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
     <div class="hdr-dot" title="接收端在线"></div>
   </div>
 
-  <!-- ═══════════ 首页（家庭影院：搜索 → 选站 → 集数 → 投屏，一条主链路）═══════════ -->
-  <div class="page active" id="page-home">
+  <!-- ═══════════ 搜索（入口：横幅 → 搜索 → 结果 → 集数 push 子页）═══ -->
+  <div class="page active" id="page-search">
     <!-- 投屏横幅（正在播放时显示，点击进遥控器）-->
     <div class="banner hidden" id="cast-banner">
       <div class="banner-in" onclick="goPage('dock')">
@@ -291,32 +299,7 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
       </div>
     </div>
 
-    <!-- 找片入口（大按钮，进搜索页）-->
-    <div class="card">
-      <div class="hero-q">想看什么？</div>
-      <button class="btn pri big-btn big-search" onclick="goPage('search')">🔍 搜想看的</button>
-      <div class="hero-sub">搜 → 选网站 → 点集数 → 电视开播</div>
-    </div>
-
-    <!-- 最近在看（历史，一键续看）-->
-    <div class="card">
-      <h2>最近在看</h2>
-      <div class="recent" id="recent"><div class="dim">还没有播放记录，搜一个剧试试。</div></div>
-    </div>
-
-    <!-- 连接状态（小卡，收底部）-->
-    <div class="card">
-      <div class="sg">
-        <div class="si"><div class="sl">目标电视</div><div class="sv warn" id="st-tv">未选择</div></div>
-        <div class="si"><div class="sl">播放中</div><div class="sv dim" id="st-playing">—</div></div>
-        <div class="si"><div class="sl">速度</div><div class="sv dim" id="st-speed">—</div></div>
-      </div>
-      <div id="errbar" class="errbar hidden">—</div>
-    </div>
-  </div>
-
-  <!-- ═══════════ 搜索（独立页：搜 → 结果 → 集数 → 投屏）═══ -->
-  <div class="page" id="page-search">
+    <!-- 搜索框 -->
     <div class="card">
       <div class="sniffrow">
         <input class="inp big-inp" id="search-q" placeholder="剧名 / 关键词，如：繁花 在线观看" onkeydown="if(event.key==='Enter')searchSites()">
@@ -325,20 +308,28 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
       <div id="search-res" class="sniffeps"><div class="dim">搜剧 → 选网站 → 点集数 → 电视开播</div></div>
     </div>
 
-    <!-- 集数（点搜索结果后出现）-->
-    <div class="card hidden" id="ep-card">
-      <div class="ep-head">
-        <span class="ep-title" id="ep-title">集数</span>
-        <span class="ep-total" id="ep-total"></span>
-      </div>
-      <div class="ep-grid" id="ep-grid"></div>
-      <div class="ep-pager" id="ep-pager"></div>
-      <div class="ep-detail hidden" id="ep-detail">
-        <div class="ep-dt" id="ep-dt">—</div>
-        <div class="ep-actions">
-          <button class="btn pri" onclick="playEp()">▶ 投屏播放</button>
-          <button class="btn gh" onclick="copyEp()">复制链接</button>
-        </div>
+    <!-- 最近在看（一键续看）-->
+    <div class="card">
+      <h2>最近在看</h2>
+      <div class="recent" id="recent"><div class="dim">还没有播放记录，搜一个剧试试。</div></div>
+    </div>
+  </div>
+
+  <!-- ═══════════ 集数（push 子页：点搜索结果后全屏推入，返回到搜索）═══ -->
+  <div class="subpage hidden" id="page-episodes">
+    <div class="sub-top">
+      <button class="btn gh sub-back" onclick="backEpisodes()">‹ 返回</button>
+      <span class="ep-title" id="ep-title">集数</span>
+      <span class="ep-total" id="ep-total"></span>
+    </div>
+    <div class="ep-grid" id="ep-grid"></div>
+    <div class="ep-pager" id="ep-pager"></div>
+    <div class="ep-detail hidden" id="ep-detail">
+      <div class="ep-dt" id="ep-dt">—</div>
+      <div class="ep-actions ep-actions3">
+        <button class="btn pri" onclick="playEpLocal()">📱 本地播放</button>
+        <button class="btn pri" onclick="playEp()">▶ 投屏播放</button>
+        <button class="btn gh" onclick="copyEp()">复制链接</button>
       </div>
     </div>
   </div>
@@ -401,6 +392,15 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
   <!-- ═══════════ 设备 ═══════════ -->
   <div class="page" id="page-dev">
     <div class="card">
+      <h2>播放状态</h2>
+      <div class="sg">
+        <div class="si"><div class="sl">目标电视</div><div class="sv warn" id="st-tv">未选择</div></div>
+        <div class="si"><div class="sl">播放中</div><div class="sv dim" id="st-playing">—</div></div>
+        <div class="si"><div class="sl">速度</div><div class="sv dim" id="st-speed">—</div></div>
+      </div>
+      <div id="errbar" class="errbar hidden">—</div>
+    </div>
+    <div class="card">
       <h2>设备</h2>
       <div class="bubbles" id="bubbles"><div class="bub-empty">加载中…</div></div>
       <button class="btn gh" onclick="rescan()">重新扫描</button>
@@ -460,8 +460,7 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
 
 <!-- ═══════════ 底部导航 ═══════════ -->
 <nav class="tabbar">
-  <div class="tab active" data-page="home" onclick="goPage('home')"><span class="ti">🏠</span><span class="tt">首页</span></div>
-  <div class="tab" data-page="search" onclick="goPage('search')"><span class="ti">🔍</span><span class="tt">搜索</span></div>
+  <div class="tab active" data-page="search" onclick="goPage('search')"><span class="ti">🔍</span><span class="tt">搜索</span></div>
   <div class="tab" data-page="library" onclick="goPage('library')"><span class="ti">🎬</span><span class="tt">媒体库</span></div>
   <div class="tab" data-page="dock" onclick="goPage('dock')"><span class="ti tbadge" id="tab-dock-ic">🎮</span><span class="tt">遥控器</span></div>
   <div class="tab" data-page="dev" onclick="goPage('dev')"><span class="ti">📺</span><span class="tt">设备</span></div>
@@ -479,6 +478,7 @@ function goPage(p) {
   document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x.dataset.page === p));
   if(p === 'set') loadCookies(); // 进设置页刷新账号固化状态
   if(p === 'library') loadLibrary(); // 进媒体库页刷继续观看+海报墙
+  if(p !== 'search') document.getElementById('page-episodes').classList.add('hidden'); // 离开搜索：episodes 子页收起
   if(p === 'search' && window._firstSearchGo) { /* 已开 */ } else if(p === 'search') { window._firstSearchGo=1; const q=document.getElementById('search-q'); if(q) setTimeout(()=>q.focus(), 80); }
 }
 
@@ -548,7 +548,7 @@ function sniffURL() {
 // 主链路嗅探：对 URL 提取集数（首页集数卡）+ WebView 兜底
 async function sniff(u, title) {
   if(!u) { toast('请输入链接', false); return; }
-  goPage('home');
+  showEpisodes();
   epLoading('提取集数中…');
   try {
     const r = await fetch('/api/sniff?url='+encodeURIComponent(u));
@@ -667,6 +667,12 @@ function selectDetailEp(index) {
   document.getElementById('detail-local').disabled = false;
 }
 
+// ── 嵌套导航：集数子页 push/pop（搜索结果点开 → 全屏推入，返回回搜索）──
+function showEpisodes() { document.getElementById('page-episodes').classList.remove('hidden'); }
+function backEpisodes() {
+  document.getElementById('page-episodes').classList.add('hidden');
+  document.getElementById('ep-detail').classList.add('hidden');
+}
 function closeDetail() {
   document.getElementById('detail-overlay').classList.add('hidden');
   selEp = null;
@@ -709,7 +715,7 @@ function closePlayer() {
   document.getElementById('player-overlay').classList.add('hidden');
 }
 function epLoading(msg) {
-  document.getElementById('ep-card').classList.remove('hidden');
+  showEpisodes();
   document.getElementById('ep-title').textContent = '…';
   document.getElementById('ep-total').textContent = '';
   document.getElementById('ep-grid').innerHTML = '<div class="ep-loading">'+msg+'</div>';
@@ -731,7 +737,7 @@ function pollSniffResult() {
 // 集数网格（分页 + 选中 + 投屏）
 function renderEpsGrid(eps, title) {
   epsData = eps; epsPage = 1; selEp = null;
-  document.getElementById('ep-card').classList.remove('hidden');
+  showEpisodes();
   document.getElementById('ep-title').textContent = title || '集数';
   document.getElementById('ep-total').textContent = '共 '+eps.length+' 集';
   drawEpGrid();
