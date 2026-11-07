@@ -308,10 +308,10 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
       <div id="search-res" class="sniffeps"><div class="dim">搜剧 → 选网站 → 点集数 → 电视开播</div></div>
     </div>
 
-    <!-- 最近在看（一键续看）-->
+    <!-- 搜索记录（点击重搜）-->
     <div class="card">
-      <h2>最近在看</h2>
-      <div class="recent" id="recent"><div class="dim">还没有播放记录，搜一个剧试试。</div></div>
+      <h2>搜索记录</h2>
+      <div class="recent" id="search-hist"><div class="dim">还没有搜索记录。</div></div>
     </div>
   </div>
 
@@ -496,6 +496,7 @@ function goPage(p) {
   document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x.dataset.page === p));
   if(p === 'set') loadCookies(); // 进设置页刷新账号固化状态
   if(p === 'logs') pollLogs();
+  if(p === 'search') loadSearchHistory();
   if(p === 'library') loadLibrary(); // 进媒体库页刷继续观看+海报墙
   if(p !== 'search') document.getElementById('page-episodes').classList.add('hidden'); // 离开搜索：episodes 子页收起
   if(p === 'search' && window._firstSearchGo) { /* 已开 */ } else if(p === 'search') { window._firstSearchGo=1; const q=document.getElementById('search-q'); if(q) setTimeout(()=>q.focus(), 80); }
@@ -796,7 +797,7 @@ function playEp() {
   fetch('/api/cast?url='+encodeURIComponent(selEp.url)+'&title='+encodeURIComponent(title))
     .then(r=>r.json())
     .then(d=>{
-      if(d.ok) { toast('已投屏第'+selEp.index+'集'); closeDetail(); goPage('dock'); loadRecent(); }
+      if(d.ok) { toast('已投屏第'+selEp.index+'集'); closeDetail(); goPage('dock'); }
       else toast(d.msg||'拿流失败', false);
     })
     .catch(e=>toast('错误: '+e.message, false));
@@ -819,29 +820,26 @@ function playEpLocal() {
 }
 
 // ── 最近在看（历史记录，一键续看）──
-async function loadRecent() {
+async function loadSearchHistory() {
   try {
-    const r = await fetch('/api/recent');
+    const r = await fetch('/api/search/history');
     const d = await r.json();
-    renderRecent(d.items||[]);
+    renderSearchHist(d.items||[]);
   } catch(e){}
 }
-function renderRecent(items) {
-  const el = document.getElementById('recent');
-  if(!items.length) { el.innerHTML = '<div class="dim">还没有播放记录，搜一个剧试试。</div>'; return; }
+function renderSearchHist(items) {
+  const el = document.getElementById('search-hist');
+  if(!items.length) { el.innerHTML = '<div class="dim">还没有搜索记录。</div>'; return; }
   el.innerHTML = items.map(it=>
-    '<div class="recent-it" onclick="replay(\''+it.url.replace(/'/g,"\\'")+'\',\''+it.title.replace(/'/g,"\\'")+'\')">'+
-    '<span style="font-size:18px">📺</span>'+
-    '<div class="recent-t"><div class="recent-title">'+it.title+'</div><div class="recent-sub">'+it.time+' · 点一下继续看</div></div>'+
+    '<div class="recent-it" onclick="rerunSearch(\''+it.query.replace(/'/g,"\\\'")+'\')">'+
+    '<span style="font-size:18px">🔍</span>'+
+    '<div class="recent-t"><div class="recent-title">'+it.query+'</div><div class="recent-sub">'+it.time+' · 点击重搜</div></div>'+
     '<span class="recent-go">›</span></div>'
   ).join('');
 }
-function replay(u, title) {
-  toast('重新投屏：'+title);
-  fetch('/api/cast?url='+encodeURIComponent(u)+'&title='+encodeURIComponent(title))
-    .then(r=>r.json())
-    .then(d=>{ if(d.ok){ goPage('dock'); } else toast(d.msg||'失败', false); })
-    .catch(e=>toast('错误: '+e.message, false));
+function rerunSearch(q) {
+  document.getElementById('search-q').value = q;
+  searchSites();
 }
 
 // ── 资源搜索（bing/360/百度 聚合）──
@@ -1195,7 +1193,7 @@ document.addEventListener('DOMContentLoaded', () => {
 // 统一轮询
 setInterval(()=>{ refresh(); pollPlay(); }, 1000);
 setInterval(pollLogs, 2500);
-refresh(); pollPlay(); pollLogs(); loadRecent();
+refresh(); pollPlay(); pollLogs(); loadSearchHistory();
 </script>
 </body>
 </html>

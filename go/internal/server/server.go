@@ -61,7 +61,7 @@ type Instance struct {
 
 	// 最近在看（历史记录，最多 5 条）
 	recentMu sync.Mutex
-	recent   []RecentItem
+	searchHist []SearchItem
 
 	// 账号固化（cookie 持久化，登录后 WebView 注入复用）
 	Cookies *CookieStore
@@ -71,28 +71,28 @@ type Instance struct {
 }
 
 // RecentItem 一条最近播放记录（首页「最近在看」一键续看）
-type RecentItem struct {
-	Title string `json:"title"`
-	URL   string `json:"url"`
+// SearchItem 搜索历史（搜索记录：点击重搜，不记播放——播放记录归媒体库）。
+type SearchItem struct {
+	Query string `json:"query"`
 	Time  string `json:"time"`
 }
 
-// recordRecent 记一条历史（同 URL 去重置顶，截断 5 条）
-func (inst *Instance) recordRecent(title, u string) {
-	if title == "" || u == "" {
+// recordSearch 记一条搜索历史（同关键词去重置顶，截断 8 条）。
+func (inst *Instance) recordSearch(q string) {
+	if q == "" {
 		return
 	}
 	inst.recentMu.Lock()
 	defer inst.recentMu.Unlock()
-	out := make([]RecentItem, 0, 5)
-	out = append(out, RecentItem{Title: title, URL: u, Time: time.Now().Format("01-02 15:04")})
-	for _, it := range inst.recent {
-		if len(out) >= 5 || it.URL == u {
+	out := make([]SearchItem, 0, 8)
+	out = append(out, SearchItem{Query: q, Time: time.Now().Format("01-02 15:04")})
+	for _, it := range inst.searchHist {
+		if len(out) >= 8 || it.Query == q {
 			continue
 		}
 		out = append(out, it)
 	}
-	inst.recent = out
+	inst.searchHist = out
 }
 
 // Options 装配选项
@@ -227,17 +227,13 @@ func New(opts Options) *Instance {
 		}
 		log.Printf("[cast] 成功 url=%s mime=%s ref=%s", st.URL, st.Mime, st.Headers["Referer"])
 		ref := st.Headers["Referer"]
-		// 记入「最近在看」（首页一键续看）
-		if title != "" {
-			inst.recordRecent(title, u)
-		}
 		writeJSON(w, map[string]any{"ok": true, "url": st.URL, "mime": st.Mime, "ref": ref})
 	})
 
-	// 最近在看（历史记录，最多 5 条）
-	mux.HandleFunc("/api/recent", func(w http.ResponseWriter, _ *http.Request) {
+	// 搜索历史（搜索记录：点击重搜；播放记录不在这——归媒体库继续观看）
+	mux.HandleFunc("/api/search/history", func(w http.ResponseWriter, _ *http.Request) {
 		inst.recentMu.Lock()
-		items := append([]RecentItem(nil), inst.recent...)
+		items := append([]SearchItem(nil), inst.searchHist...)
 		inst.recentMu.Unlock()
 		writeJSON(w, map[string]any{"ok": true, "items": items})
 	})
@@ -291,7 +287,8 @@ func New(opts Options) *Instance {
 			for _, eng := range search.BrowserEngines(q, search.EnabledEngines()) {
 				inst.WebviewRender(eng.URL) // 渲染窗口 SetURL → JS fetch 回传 outerHTML → ParseRendered 存 searchResult
 				if rs := inst.waitSearchResult(20 * time.Second); len(rs) > 0 {
-					writeJSON(w, map[string]any{"ok": true, "query": q, "results": rs, "via": "webview", "engine": eng.Name})
+					inst.recordSearch(q)
+				writeJSON(w, map[string]any{"ok": true, "query": q, "results": rs, "via": "webview", "engine": eng.Name})
 					return
 				}
 			}
@@ -302,6 +299,7 @@ func New(opts Options) *Instance {
 			writeJSON(w, map[string]any{"ok": false, "msg": err.Error(), "need_browser": true, "query": q})
 			return
 		}
+		inst.recordSearch(q)
 		writeJSON(w, map[string]any{"ok": true, "query": q, "results": rs})
 	})
 
