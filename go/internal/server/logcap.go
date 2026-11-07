@@ -1,94 +1,91 @@
-// logcap.go 全局日志捕获：捕所有包 log.Printf 输出（搜索/嗅探/拿流/投屏），
-// 环形缓冲 500 条，/api/logs 读取。辅助调试（用户要求）。
+// logcap.go 日志捕获（独立 log 文件，不劫持全局 log.SetOutput）。
+//
+// 黑屏教训：曾用 log.SetOutput(io.MultiWriter(os.Stderr, pipe)) 劫持全局 log，
+// 导致 wails3 WebView 初始化（走 log 的 AssetServer/Build Info）被 pipe 阻塞/干扰
+// → WebView 发不出 GET /ui → 桌面壳黑屏。
+//
+// 现方案：logcap 开独立 log.Logger（Append|Create，写到 ~/.mycast/mycast.log），
+// 各包调用 logger.Printf 记日志；/api/logs 读该文件。不影响全局 log、不干扰 WebView。
 package server
 
 import (
-	"io"
 	"log"
 	"os"
-	"strings"
+	"path/filepath"
 	"sync"
-	"time"
 )
 
-const logCapMax = 500
+// logFile 独立日志文件路径（~/.mycast/mycast.log）。
+var logFile string
 
-type logcap struct {
-	mu    sync.Mutex
-	lines []string
-}
+// captureLogger 独立 log.Logger（不 SetOutput 全局，避免干扰 wails3 WebView）。
+var captureLogger = log.New(os.Stderr, "", log.Ltime)
 
-var logBuf = &logcap{}
+var logOnce sync.Once
 
-// CaptureLog 捕获全局 log 输出（所有包 log.Printf 都进环形缓冲）。
-// 启动时调用一次；原 stdout 输出保留（终端/日志文件照常）。
+// CaptureLog 初始化独立日志文件 + logger（不影响全局 log，不干扰 wails3 WebView）。
+// 各包改用 logger.Printf(...) 记日志；/api/logs 读 logFile。
 func CaptureLog() {
-	r, w, _ := os.Pipe()
-	log.SetOutput(io.MultiWriter(os.Stderr, w)) // stderr 照常 + 管道捕获
-	go func() {
-		buf := make([]byte, 0, 64*1024)
-		tmp := make([]byte, 4096)
-		for {
-			n, err := r.Read(tmp)
-			if n > 0 {
-				buf = append(buf, tmp[:n]...)
-				// 按行切
-				for {
-					idx := indexByte(buf, '\n')
-					if idx < 0 {
-						break
-					}
-					line := string(buf[:idx])
-					buf = buf[idx+1:]
-					logBuf.add(line)
-				}
-				if len(buf) > 64*1024 {
-					buf = buf[:0] // 防无换行撑爆
-				}
-			}
-			if err != nil {
-				return
-			}
+	logOnce.Do(func() {
+		// 数据目录：桌面 ~/.mycast，安卓由 server.New 注入 dataDir（这里默认 home）
+		home, err := os.UserHomeDir()
+		if err != nil {
+			home = "."
 		}
-	}()
+		dir := filepath.Join(home, ".mycast")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return
+		}
+		logFile = filepath.Join(dir, "mycast.log")
+		f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err == nil {
+			captureLogger = log.New(f, "", log.Ltime)
+		}
+	})
 }
 
-func indexByte(b []byte, c byte) int {
-	for i, x := range b {
-		if x == c {
-			return i
+// Logger 取独立 logger（各包 log.Printf 改用 logger.Printf）。
+func Logger() *log.Logger { return captureLogger }
+
+// Log 记一条日志（独立文件，不影响全局）。
+func Log(format string, args ...any) { captureLogger.Printf(format, args...) }
+
+// Logf 同上（别名，调用方少写一个词）。
+func Logf(format string, args ...any) { captureLogger.Printf(format, args...) }
+
+// ReadLog 读日志文件最后 n 行（n<=0=全读，最多 500 行）。
+func ReadLog(n int) []string {
+	if logFile == "" {
+		return nil
+	}
+	data, err := os.ReadFile(logFile)
+	if err != nil {
+		return nil
+	}
+	lines := splitLines(string(data))
+	max := 500
+	if len(lines) > max {
+		lines = lines[len(lines)-max:]
+	}
+	if n > 0 && n < len(lines) {
+		lines = lines[len(lines)-n:]
+	}
+	return lines
+}
+
+func splitLines(s string) []string {
+	var out []string
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' {
+			if i > start {
+				out = append(out, s[start:i])
+			}
+			start = i + 1
 		}
 	}
-	return -1
-}
-
-func (l *logcap) add(line string) {
-	line = strings.TrimRight(line, "\r\n ")
-	if line == "" {
-		return
+	if start < len(s) {
+		out = append(out, s[start:])
 	}
-	l.mu.Lock()
-	// 已带时间戳的 log 输出直接存；无时间戳补
-	if len(line) < 20 || line[4] != '/' {
-		line = time.Now().Format("15:04:05") + " " + line
-	}
-	l.lines = append(l.lines, line)
-	if len(l.lines) > logCapMax {
-		l.lines = l.lines[len(l.lines)-logCapMax:]
-	}
-	l.mu.Unlock()
-}
-
-// Logs 最近 N 条日志（n<=0=全部）。
-func (l *logcap) Logs(n int) []string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if n <= 0 || n > len(l.lines) {
-		out := make([]string, len(l.lines))
-		copy(out, l.lines)
-		return out
-	}
-	out := make([]string, n)
-	copy(out, l.lines[len(l.lines)-n:])
 	return out
 }
