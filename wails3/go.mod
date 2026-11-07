@@ -28,4 +28,3 @@ require (
 
 replace mycast => ../go
 
-replace github.com/wailsapp/wails/v3 => ./vendor-wails
