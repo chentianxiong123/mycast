@@ -232,25 +232,24 @@ func New(opts Options) *Instance {
 			writeJSON(w, map[string]any{"ok": false, "msg": "缺少 url"})
 			return
 		}
-		e := sniff.New(sniff.Default())
-		streamURL, mime, err := e.ResolveStream(u)
+		// 三组件解耦：拿流+投屏收敛到媒体库组件（PirateSource），不再散调 sniff+relay。
+		src := &relay.PirateSource{
+			Rl:      inst.Relay,
+			Extract: sniff.New(sniff.Default()),
+			PlayURL: u,
+			Title:   title,
+		}
+		st, err := src.CastWith(rq.Context())
 		if err != nil {
 			writeJSON(w, map[string]any{"ok": false, "msg": err.Error()})
 			return
 		}
-		// 防盗链 referer = 播放页域名（透传，不能猜）
-		ref := rq.URL.Query().Get("ref")
-		if ref == "" {
-			if uu, err2 := url.Parse(u); err2 == nil {
-				ref = uu.Scheme + "://" + uu.Host + "/"
-			}
-		}
-		rl.CastStream(streamURL, ref)
+		ref := st.Headers["Referer"]
 		// 记入「最近在看」（首页一键续看）
 		if title != "" {
 			inst.recordRecent(title, u)
 		}
-		writeJSON(w, map[string]any{"ok": true, "url": streamURL, "mime": mime, "ref": ref})
+		writeJSON(w, map[string]any{"ok": true, "url": st.URL, "mime": st.Mime, "ref": ref})
 	})
 
 	// 最近在看（历史记录，最多 5 条）
