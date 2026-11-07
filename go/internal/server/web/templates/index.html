@@ -606,11 +606,12 @@ async function loadLibrary() {
     empty.style.display = items.length ? 'none' : '';
     if(!items.length) return;
     // 继续观看行：前 3 条大卡（学 ContinueWatching：大图+进度+点击续投屏）
-    cRow.innerHTML = items.slice(0,3).map(it=>
-      '<div class="continue-card" onclick="openDetail(\''+escJS(it.url)+'\',\''+escJS(it.title)+'\')">'+
-      '<div class="continue-img">'+posterImg(it,true)+'<div class="continue-progress" style="width:40%"></div></div>'+
-      '<div class="continue-title">'+it.title+'</div><div class="continue-sub">'+it.time+' · 点开续看</div></div>'
-    ).join('');
+    cRow.innerHTML = items.slice(0,3).map(it=>{
+      const p = getPlayPos(it.title);
+      return '<div class="continue-card" onclick="openDetail(\''+escJS(it.url)+'\',\''+escJS(it.title)+'\')">'+
+      '<div class="continue-img">'+posterImg(it,true)+'<div class="continue-progress" style="width:'+(p>0?p:100)+'%"></div></div>'+
+      '<div class="continue-title">'+it.title+'</div><div class="continue-sub">'+it.time+' · '+(p>0?('看到 '+p+'%'):'点开续看')+'</div></div>';
+    }).join('');
     // 海报墙：全部横向滚动（学 Row/LibraryRow：海报网格）
     pRow.innerHTML = items.map(it=>
       '<div class="poster-card">'+
@@ -707,6 +708,7 @@ function playLocal(url, mime, title, epsCtx) {
   playEps = epsCtx || { eps: [], index: 0 };
   updatePlayerCtl();
   initPlayerProgress();
+  playPosKey = (title || '').trim(); // 播放进度归媒体库：按剧集标题记 localStorage
   // 销毁旧 hls
   if(hls) { hls.destroy(); hls = null; }
   const isHLS = (mime||'').indexOf('mpegurl')>=0 || (mime||'').indexOf('m3u8')>=0 || /\.m3u8/.test(url);
@@ -800,6 +802,18 @@ function paintPlayerProgress() {
   const pct = v.duration ? (v.currentTime / v.duration) * 100 : 0;
   fill.style.width = pct + '%';
   if(t) t.textContent = fmtPlayTime(v.currentTime) + ' / ' + fmtPlayTime(v.duration||0);
+  // 播放进度归媒体库：localStorage 记当前位置（按当前剧集标题）
+  if(v.duration && pct > 0) savePlayPos(pct);
+}
+
+// ── 播放进度归媒体库（continue 卡显示真实进度）──
+let playPosKey = null;
+function savePlayPos(pct) {
+  if(!playPosKey) return;
+  try { localStorage.setItem('mc-pos:'+playPosKey, String(Math.round(pct))); } catch(e){}
+}
+function getPlayPos(title) {
+  try { const v = localStorage.getItem('mc-pos:'+title); return v ? parseInt(v,10) : 0; } catch(e){ return 0; }
 }
 
 // 播放指定集（带集数上下文，供上一集/下一集）
@@ -813,7 +827,7 @@ function playEpLocalCtx(ep, epTitle) {
   fetch('/api/cast?url='+encodeURIComponent(ep.url)+'&title='+encodeURIComponent(title))
     .then(r=>r.json())
     .then(d=>{
-      if(d.ok) playLocal(d.url, d.mime, title, { eps: epsData, index: ep.index });
+      if(d.ok) { autoFav(title, ep.url); playLocal(d.url, d.mime, title, { eps: epsData, index: ep.index }); }
       else toast(d.msg||'拿流失败', false);
     })
     .catch(e=>toast('错误: '+e.message, false));
@@ -888,10 +902,18 @@ function playEp() {
   fetch('/api/cast?url='+encodeURIComponent(selEp.url)+'&title='+encodeURIComponent(title))
     .then(r=>r.json())
     .then(d=>{
-      if(d.ok) { toast('已投屏第'+selEp.index+'集'); closeDetail(); goPage('dock'); }
+      if(d.ok) { autoFav(title, selEp.url); toast('已投屏第'+selEp.index+'集'); closeDetail(); goPage('dock'); }
       else toast(d.msg||'拿流失败', false);
     })
     .catch(e=>toast('错误: '+e.message, false));
+}
+
+// ── 播放后自动记入媒体库（播放记录归媒体库）──
+function autoFav(title, url) {
+  if(!title || !url) return;
+  const src = window.location.hostname;
+  fetch('/api/library/fav?title='+encodeURIComponent(title)+'&url='+encodeURIComponent(url)+'&source='+encodeURIComponent(src))
+    .catch(()=>{});
 }
 
 // 本地播放（内置播放器）：拿流 → 播放器里播（mp4 直接 / m3u8 用 hls.js）
