@@ -55,8 +55,8 @@ type Instance struct {
 	searchMu     sync.Mutex
 	searchResult []search.Result
 	searchQuery  string
-	// WebviewRender 桌面注入（wails3 壳渲染窗口 SetURL，触发 JS 回传 outerHTML）。
-	// 非 nil = 桌面（有 webview 渲染）；nil = Android（前端 window.hc）。
+	// WebviewRender Android 壳注入（window.hc 搜索渲染回调，渲染引擎页 JS 回传 outerHTML）。
+	// 桌面 wails3 单窗口不再创建渲染窗口，此字段 = nil；/api/search 纯 cookie 固化 fetch。
 	WebviewRender func(url string)
 
 	// 最近在看（历史记录，最多 5 条）
@@ -282,15 +282,15 @@ func New(opts Options) *Instance {
 			writeJSON(w, map[string]any{"ok": false, "msg": "缺少关键词"})
 			return
 		}
-		// 用户决策：搜索引擎全走 webview（跨端：桌面 wails3 WebKitGTK 渲染窗口 / Android 系统 WebView），
-		// 不再依赖无头 Chrome（不跨端不通用）。fetch 仅后备（非无头 Chrome）。
-		inst.searchMu.Lock()
-		inst.searchResult = nil // 清旧回传（防上次遗留污染）
-		inst.searchMu.Unlock()
-		enabled := search.EnabledEngines() // 配置开关（默认只开 baidu）
+		// 搜索引擎：webview 渲染优先（渲染窗口加载引擎页，JS fetch 回传 outerHTML），
+		// 渲染不可用时走 fetch 后备。
+		enabled := search.EnabledEngines() // 配置开关
 		if inst.WebviewRender != nil {
+			inst.searchMu.Lock()
+			inst.searchResult = nil
+			inst.searchMu.Unlock()
 			for _, eng := range search.BrowserEngines(q, enabled) {
-				inst.WebviewRender(eng.URL) // 渲染窗口 SetURL → JS fetch 回传 outerHTML → ParseRendered 存 searchResult
+				inst.WebviewRender(eng.URL)
 				if rs := inst.waitSearchResult(20 * time.Second); len(rs) > 0 {
 					inst.recordSearch(q)
 					writeJSON(w, map[string]any{"ok": true, "query": q, "results": rs, "via": "webview", "engine": eng.Name})
@@ -298,7 +298,7 @@ func New(opts Options) *Instance {
 				}
 			}
 		}
-		// fetch 后备（webview 失败/Android 无渲染窗口）：非无头 Chrome。按配置过滤引擎。
+		// fetch 后备（webview 渲染不可用）：按配置过滤引擎。
 		rs, err := inst.Search.Search(rq.Context(), q)
 		if err != nil {
 			writeJSON(w, map[string]any{"ok": false, "msg": err.Error(), "need_browser": true, "query": q})
