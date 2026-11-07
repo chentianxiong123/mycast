@@ -275,19 +275,7 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
   </div>
 
   <!-- ═══════════ 首页（家庭影院：搜索 → 选站 → 集数 → 投屏，一条主链路）═══════════ -->
-  <div class="page active" id="page-home">
-    <!-- 投屏横幅（正在播放时显示，点击进遥控器）-->
-    <div class="banner hidden" id="cast-banner">
-      <div class="banner-in" onclick="goPage('dock')">
-        <span class="banner-ic">📺</span>
-        <div class="banner-t">
-          <div class="banner-title" id="cb-title">正在播放</div>
-          <div class="banner-sub">点这里打开遥控器</div>
-        </div>
-        <span class="banner-arrow">›</span>
-      </div>
-    </div>
-
+  <div class="page active" id="page-search">
     <!-- 搜索（妈妈的唯一入口）-->
     <div class="card">
       <div class="hero-q">想看什么？</div>
@@ -315,20 +303,10 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
       </div>
     </div>
 
-    <!-- 最近在看（历史，一键续看）-->
+    <!-- 搜索记录（点击重搜）-->
     <div class="card">
-      <h2>最近在看</h2>
-      <div class="recent" id="recent"><div class="dim">还没有播放记录，搜一个剧试试。</div></div>
-    </div>
-
-    <!-- 连接状态（小卡，收底部）-->
-    <div class="card">
-      <div class="sg">
-        <div class="si"><div class="sl">目标电视</div><div class="sv warn" id="st-tv">未选择</div></div>
-        <div class="si"><div class="sl">播放中</div><div class="sv dim" id="st-playing">—</div></div>
-        <div class="si"><div class="sl">速度</div><div class="sv dim" id="st-speed">—</div></div>
-      </div>
-      <div id="errbar" class="errbar hidden">—</div>
+      <h2>搜索记录</h2>
+      <div class="recent" id="search-hist"><div class="dim">还没有搜索记录。</div></div>
     </div>
   </div>
 
@@ -472,7 +450,7 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
 
 <!-- ═══════════ 底部导航 ═══════════ -->
 <nav class="tabbar">
-  <div class="tab active" data-page="home" onclick="goPage('home')"><span class="ti">🏠</span><span class="tt">首页</span></div>
+  <div class="tab active" data-page="search" onclick="goPage('search')"><span class="ti">🔍</span><span class="tt">搜索</span></div>
   <div class="tab" data-page="library" onclick="goPage('library')"><span class="ti">🎬</span><span class="tt">媒体库</span></div>
   <div class="tab" data-page="dock" onclick="goPage('dock')"><span class="ti tbadge" id="tab-dock-ic">🎮</span><span class="tt">遥控器</span></div>
   <div class="tab" data-page="dev" onclick="goPage('dev')"><span class="ti">📺</span><span class="tt">设备</span></div>
@@ -492,6 +470,7 @@ function goPage(p) {
   if(p === 'set') { loadCookies(); loadEngines(); } // 进设置页刷账号固化+引擎开关
   if(p === 'library') loadLibrary(); // 进媒体库页刷继续观看+海报墙
   if(p === 'logs') pollLogs(); // 进日志页刷日志
+  if(p === 'search') loadSearchHistory(); // 进搜索页刷搜索记录
 }
 
 // ── 账号固化（搜索引擎登录态 cookie 持久化）──
@@ -783,7 +762,7 @@ function playEp() {
   fetch('/api/cast?url='+encodeURIComponent(selEp.url)+'&title='+encodeURIComponent(title))
     .then(r=>r.json())
     .then(d=>{
-      if(d.ok) { toast('已投屏第'+selEp.index+'集'); closeDetail(); goPage('dock'); loadRecent(); }
+      if(d.ok) { toast('已投屏第'+selEp.index+'集'); closeDetail(); goPage('dock'); }
       else toast(d.msg||'拿流失败', false);
     })
     .catch(e=>toast('错误: '+e.message, false));
@@ -805,30 +784,28 @@ function playEpLocal() {
     .catch(e=>toast('错误: '+e.message, false));
 }
 
-// ── 最近在看（历史记录，一键续看）──
-async function loadRecent() {
+// ── 搜索记录（点击重搜）──
+async function loadSearchHistory() {
   try {
-    const r = await fetch('/api/recent');
+    const r = await fetch('/api/search/history');
     const d = await r.json();
-    renderRecent(d.items||[]);
+    renderSearchHist(d.items||[]);
   } catch(e){}
 }
-function renderRecent(items) {
-  const el = document.getElementById('recent');
-  if(!items.length) { el.innerHTML = '<div class="dim">还没有播放记录，搜一个剧试试。</div>'; return; }
+function renderSearchHist(items) {
+  const el = document.getElementById('search-hist');
+  if(!el) return;
+  if(!items.length) { el.innerHTML = '<div class="dim">还没有搜索记录。</div>'; return; }
   el.innerHTML = items.map(it=>
-    '<div class="recent-it" onclick="replay(\''+it.url.replace(/'/g,"\\'")+'\',\''+it.title.replace(/'/g,"\\'")+'\')">'+
-    '<span style="font-size:18px">📺</span>'+
-    '<div class="recent-t"><div class="recent-title">'+it.title+'</div><div class="recent-sub">'+it.time+' · 点一下继续看</div></div>'+
+    '<div class="recent-it" onclick="rerunSearch(\''+it.query.replace(/'/g,"\\'")+'\')">'+
+    '<span style="font-size:18px">🔍</span>'+
+    '<div class="recent-t"><div class="recent-title">'+it.query+'</div><div class="recent-sub">'+it.time+' · 点一下重搜</div></div>'+
     '<span class="recent-go">›</span></div>'
   ).join('');
 }
-function replay(u, title) {
-  toast('重新投屏：'+title);
-  fetch('/api/cast?url='+encodeURIComponent(u)+'&title='+encodeURIComponent(title))
-    .then(r=>r.json())
-    .then(d=>{ if(d.ok){ goPage('dock'); } else toast(d.msg||'失败', false); })
-    .catch(e=>toast('错误: '+e.message, false));
+function rerunSearch(q) {
+  document.getElementById('search-q').value = q;
+  searchSites();
 }
 
 // ── 资源搜索（bing/360/百度 聚合）──
@@ -1197,7 +1174,7 @@ document.addEventListener('DOMContentLoaded', () => {
 // 统一轮询
 setInterval(()=>{ refresh(); pollPlay(); }, 1000);
 setInterval(pollLogs, 2500);
-refresh(); pollPlay(); pollLogs(); loadRecent();
+refresh(); pollPlay(); pollLogs(); loadSearchHistory(); loadLibrary();
 </script>
 </body>
 </html>
