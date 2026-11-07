@@ -1,5 +1,5 @@
-# 编译产物
-mycast
+# 编译产物（/mycast 只根目录二进制——不能写 mycast，否则误伤 go/cmd/mycast/ 与 com/mycast/ 目录）
+/mycast
 mycast-android-arm64
 go/mycast
 wails3/bin/
@@ -17,3 +17,7 @@ wails3/build/android/overlay.json
 wails3/build/android/main_android.gen.go
 android/out/
 android/dist/
+android/lib/
+android/assets/
+dist/
+wails3/bin/

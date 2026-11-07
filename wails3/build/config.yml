@@ -1,0 +1,25 @@
+# MyCast wails3 桌面壳构建配置（学 mymusic/wails3/build/config.yml）
+version: '3'
+
+info:
+  companyName: "MyCast"
+  productName: "MyCast"
+  productIdentifier: "com.mycast.app"
+  description: "家庭影院投屏中继（B站/盗版站 → 电视，DLNA）"
+  copyright: "(c) 2026, MyCast"
+  version: "0.9.0"
+
+dev_mode:
+  root_path: .
+  log_level: warn
+  debounce: 1000
+  ignore:
+    dir:
+      - .git
+      - node_modules
+      - bin
+    file:
+      - ".DS_Store"
+      - ".gitignore"
+      - "*_test.go"
+    git_ignore: true
