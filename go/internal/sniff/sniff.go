@@ -115,11 +115,20 @@ func (e *Extractor) Fetch(rawURL string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if e.cfg.UA != "" {
-		req.Header.Set("User-Agent", e.cfg.UA)
+	// 浏览器头补齐（防盗链 403/反爬 520 常查这些）：UA 默认 Android Chrome，Referer 默认本站。
+	ua := e.cfg.UA
+	if ua == "" {
+		ua = "Mozilla/5.0 (Linux; Android 13; SM-S9180) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36"
 	}
+	req.Header.Set("User-Agent", ua)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+	req.Header.Set("Upgrade-Insecure-Requests", "1")
+	// Referer：显式配置优先，否则默认详情页自身域名（防盗链常校验 Referer 同源）。
 	if e.cfg.Referer != "" {
 		req.Header.Set("Referer", e.cfg.Referer)
+	} else if u, err := url.Parse(rawURL); err == nil {
+		req.Header.Set("Referer", u.Scheme+"://"+u.Host+"/")
 	}
 	resp, err := e.hc.Do(req)
 	if err != nil {

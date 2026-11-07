@@ -239,6 +239,21 @@ func New(opts Options) *Instance {
 	})
 
 	// WebView 兜底回传：JS 拿 outerHTML（挑战完成后）→ POST 这里 → 解析存结果
+	mux.HandleFunc("/api/sniff/render-launch", func(w http.ResponseWriter, rq *http.Request) {
+		u := rq.URL.Query().Get("url")
+		if u == "" {
+			writeJSON(w, map[string]any{"ok": false, "msg": "缺少 url"})
+			return
+		}
+		LogInfo("[sniff] WebView 兑底渲染 url=%s", u)
+		if inst.WebviewRender != nil {
+			inst.WebviewRender(u) // 桌面壳：子窗口渲染详情页 → outerHTML POST /api/sniff/render
+			writeJSON(w, map[string]any{"ok": true, "msg": "rendering"})
+			return
+		}
+		writeJSON(w, map[string]any{"ok": false, "msg": "WebView 渲染不可用"})
+	})
+
 	mux.HandleFunc("/api/sniff/render", func(w http.ResponseWriter, rq *http.Request) {
 		if rq.Method != http.MethodPost {
 			writeJSON(w, map[string]any{"ok": false, "msg": "需要 POST"})
