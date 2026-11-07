@@ -417,6 +417,17 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
       <div class="recent" id="cookie-list"><div class="dim">加载中…</div></div>
     </div>
     <div class="card">
+      <h2>搜索引擎开关</h2>
+      <div class="dim" style="margin-bottom:8px">控制启用哪些搜索引擎（默认只开百度）。</div>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:8px;align-items:center">
+        <label class="dim" style="display:flex;gap:4px;align-items:center;font-size:12px"><input type="checkbox" id="eng-so"> 360</label>
+        <label class="dim" style="display:flex;gap:4px;align-items:center;font-size:12px"><input type="checkbox" id="eng-baidu"> 百度</label>
+        <label class="dim" style="display:flex;gap:4px;align-items:center;font-size:12px"><input type="checkbox" id="eng-bing"> Bing</label>
+      </div>
+      <button class="btn" onclick="saveEngines()" style="font-size:11px;padding:5px 12px">保存</button>
+      <span id="eng-save-msg" class="dim" style="font-size:11px;margin-left:8px"></span>
+    </div>
+    <div class="card">
       <h2>高级：粘贴链接嗅探</h2>
       <div class="sniffrow">
         <input class="inp" id="sniff-url" placeholder="粘贴盗版站详情页 URL">
@@ -478,7 +489,7 @@ function goPage(p) {
   curPage = p;
   document.querySelectorAll('.page').forEach(x => x.classList.toggle('active', x.id === 'page-'+p));
   document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x.dataset.page === p));
-  if(p === 'set') loadCookies(); // 进设置页刷新账号固化状态
+  if(p === 'set') { loadCookies(); loadEngines(); } // 进设置页刷账号固化+引擎开关
   if(p === 'library') loadLibrary(); // 进媒体库页刷继续观看+海报墙
   if(p === 'logs') pollLogs(); // 进日志页刷日志
 }
@@ -1146,6 +1157,33 @@ function toggleLogPause() {
 function clearLogs() {
   document.getElementById('log-list').innerHTML = '<div class="dim">已清空（新日志仍会继续追加）</div>';
   lastLogs = [];
+}
+
+// ── 搜索引擎开关 ──
+async function loadEngines() {
+  try {
+    const r = await fetch('/api/config');
+    const d = await r.json();
+    const engines = d.config?.search_engines || [];
+    ['so','baidu','bing'].forEach(e => {
+      const cb = document.getElementById('eng-'+e);
+      if(cb) cb.checked = engines.includes(e);
+    });
+  } catch(e){}
+}
+function saveEngines() {
+  const engines = ['so','baidu','bing'].filter(e => document.getElementById('eng-'+e)?.checked);
+  if(!engines.length) { toast('至少开一个引擎', false); return; }
+  fetch('/api/config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({search_engines: engines})})
+    .then(r=>r.json())
+    .then(d=>{
+      if(d.ok) {
+        toast('已保存：'+engines.join(','));
+        document.getElementById('eng-save-msg').textContent = '已生效，下次搜索使用';
+        setTimeout(()=>document.getElementById('eng-save-msg').textContent='', 3000);
+      } else toast(d.msg||'保存失败', false);
+    })
+    .catch(e=>toast('错误: '+e.message, false));
 }
 
 // ── 初始化 ──
