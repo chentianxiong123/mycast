@@ -398,6 +398,18 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
   </div>
 
   <!-- ═══════════ 设置（高级嗅探 + 日志 + 关于）═══════════ -->
+  <div class="page" id="page-logs">
+    <div class="card">
+      <h2>运行日志（/api/logs）</h2>
+      <div style="display:flex;gap:8px;margin-bottom:8px;align-items:center">
+        <input class="inp" id="log-filter" placeholder="过滤关键词（如 sniff/cast/search）" oninput="logFilter=this.value">
+        <button class="btn" onclick="clearLogs()" style="height:36px;padding:0 12px;font-size:12px">清空</button>
+        <button class="btn" id="log-pause-btn" onclick="toggleLogPause()">⏸</button>
+      </div>
+      <div class="logbox" id="log-list"><div class="dim">加载中…</div></div>
+    </div>
+  </div>
+
   <div class="page" id="page-set">
     <div class="card">
       <h2>账号固化（搜索引擎登录态）</h2>
@@ -414,7 +426,7 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
     </div>
     <div class="card">
       <h2>日志</h2>
-      <div class="logs" id="logs"></div>
+      <div class="dim" style="font-size:11px">已独立成「日志」页（tab 📋），<a onclick="goPage('logs')" style="color:var(--acc);cursor:pointer">点这里跳转</a>。</div>
     </div>
     <div class="card">
       <h2>关于</h2>
@@ -454,6 +466,7 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
   <div class="tab" data-page="dock" onclick="goPage('dock')"><span class="ti tbadge" id="tab-dock-ic">🎮</span><span class="tt">遥控器</span></div>
   <div class="tab" data-page="dev" onclick="goPage('dev')"><span class="ti">📺</span><span class="tt">设备</span></div>
   <div class="tab" data-page="set" onclick="goPage('set')"><span class="ti">⚙️</span><span class="tt">设置</span></div>
+  <div class="tab" data-page="logs" onclick="goPage('logs')"><span class="ti">📋</span><span class="tt">日志</span></div>
 </nav>
 
 <script>
@@ -467,6 +480,7 @@ function goPage(p) {
   document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x.dataset.page === p));
   if(p === 'set') loadCookies(); // 进设置页刷新账号固化状态
   if(p === 'library') loadLibrary(); // 进媒体库页刷继续观看+海报墙
+  if(p === 'logs') pollLogs(); // 进日志页刷日志
 }
 
 // ── 账号固化（搜索引擎登录态 cookie 持久化）──
@@ -1105,13 +1119,18 @@ function renderBubbles(tvs, selected, playingTitle) {
   el.innerHTML = html;
 }
 
-// ── 日志 ──
+// ── 日志（独立页：走 /api/logs，辅助调试）──
 let lastLogs = [];
+let logFilter = '';
+let logPaused = false;
 async function pollLogs() {
+  if(logPaused) return;
   try {
-    const r = await fetch('/api/status');
+    const q = logFilter ? '&q='+encodeURIComponent(logFilter) : '';
+    const r = await fetch('/api/logs?n=200'+(q?('&q='+encodeURIComponent(q)) : ''));
     const d = await r.json();
-    const el = document.getElementById('logs');
+    const el = document.getElementById('log-list');
+    if(!el) return;
     const logs = d.logs || [];
     if(JSON.stringify(logs) !== JSON.stringify(lastLogs)) {
       lastLogs = logs;
@@ -1119,6 +1138,14 @@ async function pollLogs() {
       el.scrollTop = el.scrollHeight;
     }
   } catch(e){}
+}
+function toggleLogPause() {
+  logPaused = !logPaused;
+  document.getElementById('log-pause-btn').textContent = logPaused ? '▶' : '⏸';
+}
+function clearLogs() {
+  document.getElementById('log-list').innerHTML = '<div class="dim">已清空（新日志仍会继续追加）</div>';
+  lastLogs = [];
 }
 
 // ── 初始化 ──
