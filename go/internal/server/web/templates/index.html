@@ -260,6 +260,11 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
 .player-bar{position:absolute;top:0;left:0;right:0;display:flex;align-items:center;gap:10px;padding:10px 14px;background:linear-gradient(transparent,#000 30%);z-index:81}
 .player-title{flex:1;color:#fff;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .player-close{width:36px;height:36px;border:none;border-radius:50%;background:rgba(255,255,255,.15);color:#fff;font-size:16px}
+/* 播放器底部控制栏：上一集/下一集/倍速/全屏 */
+.player-ctrl{position:absolute;bottom:0;left:0;right:0;display:flex;align-items:center;justify-content:center;gap:10px;padding:12px 14px;background:linear-gradient(transparent,#000 60%);z-index:81}
+.pc-btn{flex:1;max-width:160px;height:44px;border:none;border-radius:10px;background:rgba(255,255,255,.15);color:#fff;font-size:14px;font-weight:600;cursor:pointer;white-space:nowrap}
+.pc-btn:active{background:rgba(255,255,255,.3)}
+.pc-btn:disabled{opacity:.35;cursor:default}
 </style>
 </head>
 <body>
@@ -452,6 +457,13 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
   <div class="player-bar">
     <div class="player-title" id="player-title">…</div>
     <button class="player-close" onclick="closePlayer()">✕</button>
+  </div>
+  <!-- 播放器底部控制栏：上一集/下一集/倍速/全屏 -->
+  <div class="player-ctrl">
+    <button class="pc-btn" id="pc-prev" onclick="prevEp()" disabled>⏮ 上一集</button>
+    <button class="pc-btn" id="pc-next" onclick="nextEp()" disabled>下一集 ⏭</button>
+    <button class="pc-btn" id="pc-speed" onclick="cycleSpeed()">1x</button>
+    <button class="pc-btn" onclick="toggleFullscreen()">⛶ 全屏</button>
   </div>
 </div>
 
@@ -674,12 +686,15 @@ function closeDetail() {
 
 // ═══════════ 内置播放器（本地也能播：mp4 直接，m3u8 用 hls.js）═══
 let hls = null;
-function playLocal(url, mime, title) {
+function playLocal(url, mime, title, epsCtx) {
   if(!url) { toast('无播放地址', false); return; }
   const ov = document.getElementById('player-overlay');
   const v = document.getElementById('player-video');
   ov.classList.remove('hidden');
   document.getElementById('player-title').textContent = title || '本地播放';
+  // 记住集数上下文（上一集/下一集）
+  playEps = epsCtx || { eps: [], index: 0 };
+  updatePlayerCtl();
   // 销毁旧 hls
   if(hls) { hls.destroy(); hls = null; }
   const isHLS = (mime||'').indexOf('mpegurl')>=0 || (mime||'').indexOf('m3u8')>=0 || /\.m3u8/.test(url);
@@ -700,6 +715,65 @@ function playLocal(url, mime, title) {
     v.src = url;
     v.play().catch(()=>{});
   }
+}
+
+// ── 播放器增强：上一集/下一集/倍速/全屏 ──
+let playEps = { eps: [], index: 0 }; // 当前播放的集数上下文
+let playSpeed = 1;
+
+function updatePlayerCtl() {
+  const has = playEps.eps.length > 0;
+  const prev = document.getElementById('pc-prev');
+  const next = document.getElementById('pc-next');
+  if(prev) prev.disabled = !has || playEps.index <= 1;
+  if(next) next.disabled = !has || playEps.index >= Math.max(...playEps.eps.map(x=>x.index));
+}
+
+function prevEp() {
+  if(!playEps.eps.length) return;
+  const idx = playEps.index - 1;
+  const ep = playEps.eps.find(x=>x.index===idx);
+  if(ep) playEpLocalCtx(ep, '第'+ep.index+'集');
+}
+
+function nextEp() {
+  if(!playEps.eps.length) return;
+  const idx = playEps.index + 1;
+  const ep = playEps.eps.find(x=>x.index===idx);
+  if(ep) playEpLocalCtx(ep, '第'+ep.index+'集');
+}
+
+function cycleSpeed() {
+  const speeds = [0.5, 0.75, 1, 1.25, 1.5, 2];
+  playSpeed = speeds[(speeds.indexOf(playSpeed)+1)%speeds.length];
+  const v = document.getElementById('player-video');
+  if(v) v.playbackRate = playSpeed;
+  const b = document.getElementById('pc-speed');
+  if(b) b.textContent = playSpeed + 'x';
+  toast('倍速 '+playSpeed+'x');
+}
+
+function toggleFullscreen() {
+  const ov = document.getElementById('player-overlay');
+  if(document.fullscreenElement) document.exitFullscreen().catch(()=>{});
+  else ov.requestFullscreen().catch(()=>{});
+}
+
+// 播放指定集（带集数上下文，供上一集/下一集）
+function playEpLocalCtx(ep, epTitle) {
+  if(!ep) return;
+  selEp = ep;
+  const dt = document.getElementById('detail-title');
+  const base = (dt && dt.textContent && dt.textContent!=='…') ? dt.textContent : (document.getElementById('ep-title').textContent || '剧集');
+  const title = String(base).replace(/\d+集夹$/, '') + ' 第'+ep.index+'集';
+  toast('拿流中…');
+  fetch('/api/cast?url='+encodeURIComponent(ep.url)+'&title='+encodeURIComponent(title))
+    .then(r=>r.json())
+    .then(d=>{
+      if(d.ok) playLocal(d.url, d.mime, title, { eps: epsData, index: ep.index });
+      else toast(d.msg||'拿流失败', false);
+    })
+    .catch(e=>toast('错误: '+e.message, false));
 }
 
 function closePlayer() {
@@ -780,17 +854,7 @@ function playEp() {
 // 本地播放（内置播放器）：拿流 → 播放器里播（mp4 直接 / m3u8 用 hls.js）
 function playEpLocal() {
   if(!selEp) return;
-  const dt = document.getElementById('detail-title');
-  const base = (dt && dt.textContent && dt.textContent!=='…') ? dt.textContent : (document.getElementById('ep-title').textContent || '剧集');
-  const title = String(base).replace(/\d+集夹$/, '') + ' 第'+selEp.index+'集';
-  toast('拿流中…');
-  fetch('/api/cast?url='+encodeURIComponent(selEp.url)+'&title='+encodeURIComponent(title))
-    .then(r=>r.json())
-    .then(d=>{
-      if(d.ok) { playLocal(d.url, d.mime, title); }
-      else toast(d.msg||'拿流失败', false);
-    })
-    .catch(e=>toast('错误: '+e.message, false));
+  playEpLocalCtx(selEp, '第'+selEp.index+'集');
 }
 
 // ── 搜索记录（点击重搜）──
