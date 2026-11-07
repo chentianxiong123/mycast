@@ -216,6 +216,23 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
 .tab .tbadge::after{content:'';position:absolute;top:-3px;right:-3px;width:7px;height:7px;border-radius:50%;background:var(--acc)}
 
 .hidden{display:none!important}
+
+/* ═══════════ 媒体库（移植 OnScreen：继续观看行 + 海报墙）═══ */
+.lib-sec{margin-bottom:14px}
+.lib-sec h2{font-size:10px;color:var(--dim);font-weight:700;letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px}
+.row-scroll{display:flex;gap:10px;overflow-x:auto;padding-bottom:4px;scrollbar-width:none}
+.row-scroll::-webkit-scrollbar{display:none}
+/* 继续观看大卡（学 OnScreen ContinueWatching）*/
+.continue-card{flex:0 0 auto;width:200px;cursor:pointer}
+.continue-img{width:200px;height:112px;border-radius:10px;background:var(--card2);border:1px solid var(--line);position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;font-size:38px;font-weight:800;color:var(--acc)}
+.continue-progress{position:absolute;left:0;bottom:0;height:3px;background:var(--acc)}
+.continue-title{font-size:12px;font-weight:600;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.continue-sub{font-size:10px;color:var(--dim);margin-top:2px}
+/* 海报卡（学 OnScreen Row/LibraryRow）*/
+.poster-card{flex:0 0 auto;width:110px;cursor:pointer}
+.poster-img{width:110px;height:155px;border-radius:10px;background:var(--card2);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:36px;font-weight:800;color:var(--acc)}
+.poster-title{font-size:11px;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.poster-sub{font-size:9px;color:var(--dim);margin-top:1px}
 </style>
 </head>
 <body>
@@ -286,6 +303,21 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
       </div>
       <div id="errbar" class="errbar hidden">—</div>
     </div>
+  </div>
+
+  <!-- ═══════════ 媒体库（移植 OnScreen UI 结构：继续观看行 + 海报墙）═══ -->
+  <div class="page" id="page-library">
+    <!-- 继续观看行（学 OnScreen ContinueWatching：大卡 + 进度条 + 点击续投屏）-->
+    <div class="lib-sec" id="lib-continue-sec">
+      <h2>继续观看</h2>
+      <div class="row-scroll" id="continue-row"></div>
+    </div>
+    <!-- 海报墙（学 OnScreen Row/LibraryRow：横向滚动海报网格）-->
+    <div class="lib-sec" id="lib-poster-sec">
+      <h2>媒体库</h2>
+      <div class="row-scroll" id="poster-row"></div>
+    </div>
+    <div id="lib-empty" class="dim" style="padding:20px 4px;text-align:center">搜过的剧会出现在这里，点海报看集数</div>
   </div>
 
   <!-- ═══════════ 操作台 ═══════════ -->
@@ -367,6 +399,7 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
 <!-- ═══════════ 底部导航 ═══════════ -->
 <nav class="tabbar">
   <div class="tab active" data-page="home" onclick="goPage('home')"><span class="ti">🏠</span><span class="tt">首页</span></div>
+  <div class="tab" data-page="library" onclick="goPage('library')"><span class="ti">🎬</span><span class="tt">媒体库</span></div>
   <div class="tab" data-page="dock" onclick="goPage('dock')"><span class="ti tbadge" id="tab-dock-ic">🎮</span><span class="tt">遥控器</span></div>
   <div class="tab" data-page="dev" onclick="goPage('dev')"><span class="ti">📺</span><span class="tt">设备</span></div>
   <div class="tab" data-page="set" onclick="goPage('set')"><span class="ti">⚙️</span><span class="tt">设置</span></div>
@@ -382,6 +415,7 @@ function goPage(p) {
   document.querySelectorAll('.page').forEach(x => x.classList.toggle('active', x.id === 'page-'+p));
   document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x.dataset.page === p));
   if(p === 'set') loadCookies(); // 进设置页刷新账号固化状态
+  if(p === 'library') loadLibrary(); // 进媒体库页刷继续观看+海报墙
 }
 
 // ── 账号固化（搜索引擎登录态 cookie 持久化）──
@@ -464,6 +498,47 @@ async function sniff(u, title) {
     }
     epLoading(d.msg||'提取失败');
   } catch(e) { epLoading('网络错误: '+e.message); }
+}
+
+// ═══════════ 媒体库（移植 OnScreen UI 结构：继续观看行 + 海报墙）═══
+// 纯流媒体索引：从不产生文件/本地存，只记录看过/搜过的剧（流媒体源）。
+function libEmoji(title) {
+  // 无海报图（盗版站无标准封面），用标题首字做占位（学 OnScreen assetUrl，但不用 /artwork 文件）
+  const t = (title||'?').trim();
+  return t ? t[0].toUpperCase() : '?';
+}
+
+async function loadLibrary() {
+  try {
+    const r = await fetch('/api/recent');
+    const d = await r.json();
+    const items = d.items || [];
+    const cRow = document.getElementById('continue-row');
+    const pRow = document.getElementById('poster-row');
+    const empty = document.getElementById('lib-empty');
+    document.getElementById('lib-continue-sec').style.display = items.length ? '' : 'none';
+    document.getElementById('lib-poster-sec').style.display = items.length ? '' : 'none';
+    empty.style.display = items.length ? 'none' : '';
+    if(!items.length) return;
+    // 继续观看行：前 3 条大卡（学 ContinueWatching：大图+进度+点击续投屏）
+    cRow.innerHTML = items.slice(0,3).map(it=>
+      '<div class="continue-card" onclick="openDetail(\''+it.url.replace(/'/g,"\\'")+'\',\''+it.title.replace(/'/g,"\\'")+'\')">'+
+      '<div class="continue-img">'+libEmoji(it.title)+'<div class="continue-progress" style="width:40%"></div></div>'+
+      '<div class="continue-title">'+it.title+'</div><div class="continue-sub">'+it.time+' · 点开续看</div></div>'
+    ).join('');
+    // 海报墙：全部横向滚动（学 Row/LibraryRow：海报网格）
+    pRow.innerHTML = items.map(it=>
+      '<div class="poster-card" onclick="openDetail(\''+it.url.replace(/'/g,"\\'")+'\',\''+it.title.replace(/'/g,"\\'")+'\')">'+
+      '<div class="poster-img">'+libEmoji(it.title)+'</div>'+
+      '<div class="poster-title">'+it.title+'</div><div class="poster-sub">'+it.time+'</div></div>'
+    ).join('');
+  } catch(e){}
+}
+
+// 详情（学 OnScreen ItemDetail）：点海报 → 嗅探集数（流媒体源）→ 跳首页集数列表播放
+function openDetail(url, title) {
+  if(!url) { toast('无链接', false); return; }
+  sniff(url, title); // 复用现有嗅探：拿流媒体源集数 → 首页集数列表 → 播放
 }
 function epLoading(msg) {
   document.getElementById('ep-card').classList.remove('hidden');
