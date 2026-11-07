@@ -333,12 +333,7 @@ func (t *tsRewriteReader) Read(p []byte) (int, error) {
 				}
 				return 0, io.EOF
 			}
-			// 完整一个 TS 包：重写 PTS
-			if t.rw.rewrite(t.buf) {
-				t.rewritten++
-			}
-			t.fill = tsPacketSize
-			// 重写 PTS
+			// 完整一个 TS 包：重写 PTS（只重写一次，避免同一包 PTS 被二次叠加）
 			if t.rw.rewrite(t.buf) {
 				t.rewritten++
 			}
