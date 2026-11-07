@@ -171,4 +171,77 @@ func TestE2EDesktopRenders(t *testing.T) {
 	} else {
 		t.Logf("搜索 ok：%d 结果", len(sr.Results))
 	}
+
+	// 4. JS 桥 window.hc 存在（WebView 兑底桥）→ 测 /api/sniff/render-launch 返回 rendering
+	//    前端桥 window.hc.sniffRender(url) fetch 这个端点；rendering = 桥能调通后端。
+	launchResp, err := http.Get(baseURL + "/api/sniff/render-launch?url=http%3A%2F%2Fexample.com%2F")
+	if err != nil {
+		t.Fatalf("GET /api/sniff/render-launch: %v", err)
+	}
+	var lr struct {
+		Ok  bool   `json:"ok"`
+		Msg string `json:"msg"`
+	}
+	json.NewDecoder(launchResp.Body).Decode(&lr)
+	launchResp.Body.Close()
+	if !lr.Ok {
+		t.Errorf("JS 桥 window.hc.sniffRender 调不通：%v（%s，WebView 兑底断）", lr.Ok, lr.Msg)
+	} else {
+		t.Logf("JS 桥 window.hc 存在：render-launch → %s", lr.Msg)
+	}
+
+	// 5. sniff 提取链路：/api/sniff 对已知站返回集数或 need_browser（不该裸报错）
+	//    用 example.com（无集数，但不应 500/空响应）。
+	sniffResp, err := http.Get(baseURL + "/api/sniff?url=https%3A%2F%2Fexample.com%2F")
+	if err != nil {
+		t.Fatalf("GET /api/sniff: %v", err)
+	}
+	var snr struct {
+		Ok          bool `json:"ok"`
+		Episodes    []any `json:"episodes"`
+		NeedBrowser bool `json:"need_browser"`
+	}
+	json.NewDecoder(sniffResp.Body).Decode(&snr)
+	sniffResp.Body.Close()
+	t.Logf("sniff 链路 ok=%v episodes=%d need_browser=%v", snr.Ok, len(snr.Episodes), snr.NeedBrowser)
+
+	// 6. 配置开关：/api/config 返回 search_engines（默认三引擎）
+	cfgResp, err := http.Get(baseURL + "/api/config")
+	if err != nil {
+		t.Fatalf("GET /api/config: %v", err)
+	}
+	var cr struct {
+		Config struct {
+			SearchEngines []string `json:"search_engines"`
+		} `json:"config"`
+	}
+	json.NewDecoder(cfgResp.Body).Decode(&cr)
+	cfgResp.Body.Close()
+	if len(cr.Config.SearchEngines) == 0 {
+		t.Errorf("配置开关 search_engines 为空（默认应三引擎）")
+	} else {
+		t.Logf("配置开关 ok：%v", cr.Config.SearchEngines)
+	}
+
+	// 7. 日志链路：/api/logs 有内容（搜索已记 [search] 日志）
+	logResp, err := http.Get(baseURL + "/api/logs?n=50")
+	if err != nil {
+		t.Fatalf("GET /api/logs: %v", err)
+	}
+	var lgr struct {
+		Logs []string `json:"logs"`
+	}
+	json.NewDecoder(logResp.Body).Decode(&lgr)
+	logResp.Body.Close()
+	hasSearchLog := false
+	for _, l := range lgr.Logs {
+		if strings.Contains(l, "[search]") {
+			hasSearchLog = true
+		}
+	}
+	if !hasSearchLog {
+		t.Errorf("日志链路无 [search] 日志（搜索没记日志）")
+	} else {
+		t.Logf("日志链路 ok：有 [search] 日志（%d 条）", len(lgr.Logs))
+	}
 }
