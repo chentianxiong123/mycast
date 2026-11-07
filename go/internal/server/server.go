@@ -109,6 +109,7 @@ type Options struct {
 // 调用方负责把返回的 Handler 挂到 http.Server 上。
 func New(opts Options) *Instance {
 	CaptureLog() // 捕获全局 log（搜索/嗅探/拿流/投屏 → /api/logs 辅助调试）
+	initConfig() // 保证 config.json 存在（默认只开 baidu，用户可在设置页改）
 	port := opts.Port
 	if port == "" {
 		port = Port
@@ -283,21 +284,35 @@ func New(opts Options) *Instance {
 		}
 		// 用户决策：搜索引擎全走 webview（跨端：桌面 wails3 WebKitGTK 渲染窗口 / Android 系统 WebView），
 		// 不再依赖无头 Chrome（不跨端不通用）。fetch 仅后备（非无头 Chrome）。
+		inst.searchMu.Lock()
+		inst.searchResult = nil // 清旧回传（防上次遗留污染）
+		inst.searchMu.Unlock()
+		enabled := search.EnabledEngines() // 配置开关（默认只开 baidu）
 		if inst.WebviewRender != nil {
-			for _, eng := range search.BrowserEngines(q, search.EnabledEngines()) {
+			for _, eng := range search.BrowserEngines(q, enabled) {
 				inst.WebviewRender(eng.URL) // 渲染窗口 SetURL → JS fetch 回传 outerHTML → ParseRendered 存 searchResult
 				if rs := inst.waitSearchResult(20 * time.Second); len(rs) > 0 {
 					inst.recordSearch(q)
-				writeJSON(w, map[string]any{"ok": true, "query": q, "results": rs, "via": "webview", "engine": eng.Name})
+					writeJSON(w, map[string]any{"ok": true, "query": q, "results": rs, "via": "webview", "engine": eng.Name})
 					return
 				}
 			}
 		}
-		// fetch 后备（webview 失败/Android 无渲染窗口）：非无头 Chrome。
+		// fetch 后备（webview 失败/Android 无渲染窗口）：非无头 Chrome。按配置过滤引擎。
 		rs, err := inst.Search.Search(rq.Context(), q)
 		if err != nil {
 			writeJSON(w, map[string]any{"ok": false, "msg": err.Error(), "need_browser": true, "query": q})
 			return
+		}
+		// 按启用引擎过滤（config 控制所有路径）
+		if enabled != nil {
+			en := map[string]bool{}
+			for _, e := range enabled { en[e] = true }
+			var f []search.Result
+			for _, r := range rs {
+				if en[r.Engine] { f = append(f, r) }
+			}
+			rs = f
 		}
 		inst.recordSearch(q)
 		writeJSON(w, map[string]any{"ok": true, "query": q, "results": rs})
@@ -441,6 +456,28 @@ func New(opts Options) *Instance {
 		inst.Library.Fav(title, u, poster, source)
 		writeJSON(w, map[string]any{"ok": true, "fav": true})
 	})
+	// 搜索配置（引擎开关）
+	mux.HandleFunc("/api/config", func(w http.ResponseWriter, rq *http.Request) {
+		switch rq.Method {
+		case http.MethodGet:
+			writeJSON(w, map[string]any{"ok": true, "config": getConfig()})
+		case http.MethodPost:
+			var cfg map[string]any
+			if err := json.NewDecoder(rq.Body).Decode(&cfg); err != nil {
+				writeJSON(w, map[string]any{"ok": false, "msg": "无效 JSON"})
+				return
+			}
+			if err := saveConfig(cfg); err != nil {
+				writeJSON(w, map[string]any{"ok": false, "msg": err.Error()})
+				return
+			}
+			log.Printf("[config] 保存配置 engines=%v", cfg["search_engines"])
+			writeJSON(w, map[string]any{"ok": true})
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
 	// 日志（辅助调试）：?n=条数（默认全部）&q=关键词过滤
 	mux.HandleFunc("/api/logs", func(w http.ResponseWriter, rq *http.Request) {
 		n := 0
@@ -645,3 +682,45 @@ func (inst *Instance) posterProxy(w http.ResponseWriter, rq *http.Request) {
 	_, _ = io.Copy(w, resp.Body)
 }
 
+// configPath 搜索配置路径（与 search/browser.go 同路径）。
+const configPath = "/mnt/shared/mycast/config.json"
+
+// defaultConfig 默认配置：只开百度（用户要求先只开 baidu）。
+var defaultConfig = map[string]any{
+	"search_engines": []string{"baidu"},
+}
+
+// initConfig 确保 config.json 存在（不存在则写默认）。
+func initConfig() {
+	if _, err := os.Stat(configPath); err == nil {
+		return // 已存在不覆盖
+	}
+	b, _ := json.MarshalIndent(defaultConfig, "", "  ")
+	if err := os.WriteFile(configPath, b, 0644); err != nil {
+		log.Printf("[config] 写入默认配置失败: %v", err)
+	} else {
+		log.Printf("[config] 创建默认配置 %s（只开 baidu）", configPath)
+	}
+}
+
+// getConfig 读取完整配置（JSON）。
+func getConfig() map[string]any {
+	b, err := os.ReadFile(configPath)
+	if err != nil {
+		return defaultConfig
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		return defaultConfig
+	}
+	return m
+}
+
+// saveConfig 保存完整配置。
+func saveConfig(m map[string]any) error {
+	b, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(configPath, b, 0644)
+}

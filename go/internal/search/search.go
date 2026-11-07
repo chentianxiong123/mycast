@@ -472,6 +472,10 @@ func baiduMu(raw string) string {
 var (
 	// 百度 data-log：兼容单引号 data-log='{"mu":...}'（移动版用单引号）
 	reDataLog = regexp.MustCompile(`data-log=['"]([^'"]*mu[^'"]*)['"]`)
+	// 百度新版（2026+）：结果链接全走 baidu.com/link?url= 跳转
+	reBaiduLink = regexp.MustCompile(`href="(https?://(?:www\.)?baidu\.com/link\?url=[^"]+)"`)
+	// 兑底：任意 <a href="http...">（新版百度真链，排除 baidu 域在代码里判）
+	reAnyHref = regexp.MustCompile(`href="(https?://[^"]+)"`)
 	// bing 结果项（已用 XPath 遍历，正则保留备查）
 	reTag = regexp.MustCompile(`<[^>]+>`)
 )
@@ -626,12 +630,45 @@ func parseSoHTML(htmlText string) []Result {
 // parseBaiduHTML 解析百度结果页 HTML（data-log 的 mu 字段）。
 func parseBaiduHTML(htmlText string) []Result {
 	var rs []Result
+	// 规则1（旧版）：data-log='{"mu":"真实URL"}'
 	for _, m := range reDataLog.FindAllStringSubmatch(htmlText, -1) {
 		mu := baiduMu(m[1])
 		if mu == "" || strings.HasPrefix(mu, "javascript") {
 			continue
 		}
 		rs = append(rs, Result{Engine: "baidu", URL: mu})
+	}
+	// 规则2（新版 2026+）：结果链接全走 http(s)://www.baidu.com/link?url= 跳转（外链 0，data-log 已移除）
+	// 抓 baidu.com/link?url= 出现频次最高的结果链接（同一条结果 href 重复出现，去重）
+	if len(rs) == 0 {
+		seen := map[string]bool{}
+		for _, m := range reBaiduLink.FindAllStringSubmatch(htmlText, -1) {
+			u := html.UnescapeString(m[1])
+			key := u
+			if i := strings.Index(u, "&"); i > 0 {
+				key = u[:i] // 去重按 link?url= 核心（忽略追踪参数，同结果多条 href 合并）
+			}
+			if u == "" || seen[key] {
+				continue
+			}
+			seen[key] = true
+			rs = append(rs, Result{Engine: "baidu", URL: u})
+		}
+		// 规则3（兜底）：非 baidu 域的直链 <a href="http...">（有时结果直接给真链）
+		if len(rs) == 0 {
+			for _, m := range reAnyHref.FindAllStringSubmatch(htmlText, -1) {
+				u := html.UnescapeString(m[1])
+				lu := strings.ToLower(u)
+				if strings.Contains(lu, "baidu.com") || strings.Contains(lu, "bdstatic") || strings.Contains(lu, "bcebos") || strings.Contains(lu, "hao123") {
+					continue
+				}
+				if !strings.HasPrefix(lu, "http") || seen[u] {
+					continue
+				}
+				seen[u] = true
+				rs = append(rs, Result{Engine: "baidu", URL: u})
+			}
+		}
 	}
 	return rs
 }

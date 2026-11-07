@@ -45,15 +45,16 @@ func backendPort() string {
 func renderJS(port string) string {
 	return `(function() {
   var host = location.hostname;
-  var engine = host.indexOf('so.com') >= 0 ? 'so' : host.indexOf('baidu.com') >= 0 ? 'baidu' : host.indexOf('bing.com') >= 0 ? 'bing' : host.indexOf('127.0.0.1') >= 0 ? 'test' : '';
+  var engine = host.indexOf('so.com') >= 0 ? 'so' : host.indexOf('baidu.com') >= 0 ? 'baidu' : host.indexOf('bing.com') >= 0 ? 'bing' : '';
   if (engine) {
     setTimeout(function() {
       try {
         var html = document.documentElement.outerHTML;
-        fetch('https://127.0.0.1:` + port + `/api/search/render?engine=' + engine, {
+        var url = encodeURIComponent(location.href);
+        fetch('https://127.0.0.1:` + port + `/api/search/render?engine=' + engine + '&url=' + url, {
           method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: html
         }).catch(function(e) {
-          try { fetch('https://127.0.0.1:` + port + `/api/search/render?engine=' + engine + '&err=1', {method:'POST',headers:{'Content-Type':'text/plain'},body:String(e)}); } catch(e2){}
+          try { fetch('https://127.0.0.1:` + port + `/api/search/render?engine=' + engine + '&url=' + url + '&err=1', {method:'POST',headers:{'Content-Type':'text/plain'},body:String(e)}); } catch(e2){}
         });
       } catch (e) {
         try { fetch('https://127.0.0.1:` + port + `/api/search/render?engine=' + engine + '&err=1', {method:'POST',headers:{'Content-Type':'text/plain'},body:String(e)}); } catch(e2){}
@@ -133,7 +134,7 @@ func main() {
 	})
 
 	// 主窗口:mycast UI（真实后端 HTTP，同源）
-	app.Window.NewWithOptions(application.WebviewWindowOptions{
+	mainWin := app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:            "MyCast 家庭影院",
 		Width:            1280,
 		Height:           800,
@@ -143,27 +144,31 @@ func main() {
 		URL:              "http://127.0.0.1:" + port + "/ui",
 		JS:               "window.hcEnv='desktop';",
 	})
+	mainWin.Show()
+	mainWin.SetAlwaysOnTop(true) // 主窗口置顶，盖住渲染小窗（用户只看到主窗口）
 
 	// 隐藏渲染窗口:webview 渲染搜索引擎（SetURL → WindowLoadFinished → JS fetch outerHTML 回后端）
 	// 注意:WebKitGTK 隐藏窗口（Hide）不渲染 → 显示但移出屏幕（-2000,-2000，不打扰）。
 	// 无 DISPLAY（SSH 无 X）:WebKitGTK 无法加载远程页，不注入（/api/search 走 fetch 后备）。
 	if os.Getenv("DISPLAY") != "" || os.Getenv("WAYLAND_DISPLAY") != "" {
+		// 渲染窗口极小（WebKitGTK 可见才渲染；屏幕角落不挡主窗口），主窗口居中置顶。
 		renderWin := app.Window.NewWithOptions(application.WebviewWindowOptions{
 			Title:            "mycast-render",
-			Width:            1280,
-			Height:           800,
+			Width:            800,
+			Height:           400,
 			URL:              "about:blank",
 			JS:               renderJS(httpsPort),
 			BackgroundColour: application.NewRGB(17, 17, 17),
 		})
-		renderWin.SetPosition(0, 0) // 临时：移回屏幕截图确认 https 本地渲染
+		_ = renderWin // 移到屏幕外（WebKitGTK 可见才渲染）；主窗口置顶遮挡
+		renderWin.SetPosition(0, 0) // 屏幕左上角小窗（WebKitGTK 可见才渲染，不挡主窗口）
 
 		// WebviewRender 注入:/api/search 触发渲染窗口 SetURL（异步 JS 回传 → /api/search/render → ParseRendered）
 		inst.WebviewRender = func(url string) {
 			log.Printf("[render] SetURL %s", url)
 			renderWin.SetURL(url)
 		}
-		renderWin.SetPosition(0, 0) // 临时：移回屏幕截图确认 https 本地渲染
+		renderWin.SetPosition(0, 0) // 屏幕左上角小窗（WebKitGTK 可见才渲染，不挡主窗口）
 		// 临时测试:渲染窗口加载 https 本地（TLS IGNORE 信任自签 + JS 回传）
 		renderWin.SetURL("https://127.0.0.1:" + httpsPort + "/ui")
 		log.Printf("[mycast] webview 渲染窗口已就绪（DISPLAY=%s）", os.Getenv("DISPLAY"))
