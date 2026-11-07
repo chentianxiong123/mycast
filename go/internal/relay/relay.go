@@ -442,6 +442,10 @@ func (rl *Relay) startRelayByCID(aid, cid string) {
 	rl.startedAt = time.Now()
 	rl.mu.Unlock()
 	rl.logf("媒体会话就绪: %s", ses.URL)
+	// B站 URL 到期续期：DASH upgcxcode 含 deadline → 到期前热换新 URL（治 30 分钟卡顿）
+	if _, _, dl, ok := extractBiliKey(st.URL); ok && dl > 0 {
+		rl.startBiliRenew(ses, aid, cid, dl)
+	}
 	rl.pushToTV(ses)
 }
 
