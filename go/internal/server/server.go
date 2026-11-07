@@ -684,9 +684,9 @@ func (inst *Instance) posterProxy(w http.ResponseWriter, rq *http.Request) {
 // configPath 搜索配置路径（与 search/browser.go 同路径）。
 const configPath = "/mnt/shared/mycast/config.json"
 
-// defaultConfig 默认配置：只开百度（用户要求先只开 baidu）。
+// defaultConfig 默认配置：三引擎全开（百度验证码时 bing/so 兜底，避免 0 结果）。
 var defaultConfig = map[string]any{
-	"search_engines": []string{"baidu"},
+	"search_engines": []string{"baidu", "bing", "so"},
 }
 
 // initConfig 确保 config.json 存在（不存在则写默认）。

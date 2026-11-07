@@ -174,6 +174,11 @@ func isLegitSite(rawURL string) bool {
 		return false
 	}
 	host := strings.ToLower(u.Hostname())
+	// 百度新版跳转链接 baidu.com/link?url=：不是合法站（要 follow 到真实盗版站），不当合法站过滤
+	if strings.Contains(u.Path, "/link") && strings.Contains(u.RawQuery, "url=") &&
+		(host == "baidu.com" || strings.HasSuffix(host, ".baidu.com")) {
+		return false
+	}
 	for _, d := range []string{
 		"bilibili.com", "b23.tv", "youku.com", "iqiyi.com", "qiyi.com",
 		"qq.com", "v.qq.com", "mgtv.com", "sohu.com", "douyin.com",
@@ -440,7 +445,7 @@ func (a *Aggregator) searchBaidu(ctx context.Context, query string) ([]Result, e
 	if isCaptcha(body) {
 		return nil, fmt.Errorf("baidu: 触发安全验证")
 	}
-	// data-log='{"mu":"真实URL"}' → mu（兼容单引号），title 从附近 <a> 提取
+	// data-log='{"mu":"真实URL"}' → mu（兼容单引号）
 	var rs []Result
 	for _, m := range reDataLog.FindAllStringSubmatch(body, -1) {
 		mu := baiduMu(m[1])
@@ -448,6 +453,16 @@ func (a *Aggregator) searchBaidu(ctx context.Context, query string) ([]Result, e
 			continue
 		}
 		rs = append(rs, Result{Engine: "baidu", URL: mu})
+	}
+	// 百度新版（2026+）：data-log 无 mu，外链全走 baidu.com/link?url= 跳转（要 follow 真实目标）
+	if len(rs) == 0 {
+		for _, m := range reBaiduLink.FindAllStringSubmatch(body, -1) {
+			u := m[1]
+			if u == "" {
+				continue
+			}
+			rs = append(rs, Result{Engine: "baidu", URL: u})
+		}
 	}
 	if len(rs) == 0 {
 		return nil, fmt.Errorf("baidu: 未提取到结果")

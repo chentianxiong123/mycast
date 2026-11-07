@@ -436,6 +436,7 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
     <button class="btn pri detail-close-btn" onclick="closeDetail()">关闭</button>
     <button class="btn gh detail-play-btn" id="detail-local" onclick="playEpLocal()" disabled>📱 本地播放</button>
     <button class="btn gh detail-play-btn" id="detail-play" onclick="playEp()" disabled>▶ 投屏</button>
+    <button class="btn gh detail-play-btn" id="detail-copy" onclick="copyEp()" disabled>📋 复制</button>
   </div>
 </div>
 
@@ -618,6 +619,7 @@ function openDetail(url, title) {
   document.getElementById('detail-eps').innerHTML = '';
   document.getElementById('detail-play').disabled = true;
   document.getElementById('detail-local').disabled = true;
+  document.getElementById('detail-copy').disabled = true;
   selEp = null;
   // 嗅探流媒体源集数
   loadDetail(url, title);
@@ -656,6 +658,7 @@ function selectDetailEp(index) {
   document.querySelectorAll('.detail-ep').forEach(x=>x.classList.toggle('sel', x.id==='dep-'+index));
   document.getElementById('detail-play').disabled = false;
   document.getElementById('detail-local').disabled = false;
+  document.getElementById('detail-copy').disabled = false;
 }
 
 function closeDetail() {
