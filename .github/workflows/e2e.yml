@@ -1,0 +1,66 @@
+# MyCast e2e CI（不每次 push 跑，手动触发 + 版本 tag 触发）。
+#
+# 为什么：e2e 测真实窗口渲染（xvfb 虚拟 X）+ WebKitGTK 依赖，慢（~70s）+ 依赖系统库，
+# 不适合每次 push 都跑（黑屏/搜索盲区靠手动/发版时跑）。
+#
+# 触发：
+#   - workflow_dispatch（Actions 页手动点 Run）
+#   - push tag v*（发版时跑）
+#
+# 跑：
+#   - 后端单元测试（go test ./...）
+#   - 模板骨架测试（防黑屏）
+#   - 桌面壳 e2e（xvfb 虚拟 X，窗口渲染非黑 + 搜索 + JS 桥 + 配置 + 日志）
+name: e2e
+
+on:
+  workflow_dispatch: # 手动触发
+  push:
+    tags:
+      - 'v*' # 发版 tag 触发（不每次 push）
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: 安装系统依赖（WebKitGTK 6.0 + GTK4 + xvfb + dbus）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkitgtk-6.0-4 \
+            libgtk-4-dev \
+            libgtk-4-1 \
+            xvfb \
+            dbus \
+            xauth \
+            xdotool \
+            imagemagick \
+            dbus-x11
+          # 确认 webkit 6.0 库装好
+          ldconfig -p | grep -i webkitgtk-6.0 || echo "警告：webkitgtk-6.0 未找到"
+
+      - name: 后端单元测试（含模板骨架，防黑屏）
+        run: |
+          cd go
+          go test ./... -timeout 120s
+
+      - name: 编译桌面壳
+        run: |
+          cd wails3
+          go build -o /tmp/mycast-e2e .
+
+      - name: 桌面壳 e2e（xvfb 虚拟 X，窗口渲染非黑 + 搜索 + JS 桥）
+        run: |
+          cd wails3/e2e
+          MYCAST_BIN=/tmp/mycast-e2e xvfb-run -a -s "-screen 0 1280x800x24" dbus-run-session -- \
+            go test -v -run TestE2E -timeout 150s .
