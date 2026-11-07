@@ -381,6 +381,12 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
       <h2>运行日志（/api/logs）</h2>
       <div style="display:flex;gap:8px;margin-bottom:8px;align-items:center">
         <input class="inp" id="log-filter" placeholder="过滤关键词（如 sniff/cast/search）" oninput="logFilter=this.value">
+        <select class="inp" id="log-level" onchange="logLevel=this.value" style="max-width:90px;height:36px;font-size:12px">
+          <option value="">全部</option>
+          <option value="INFO">INFO</option>
+          <option value="WARN">WARN</option>
+          <option value="ERROR">ERROR</option>
+        </select>
         <button class="btn" onclick="clearLogs()" style="height:36px;padding:0 12px;font-size:12px">清空</button>
         <button class="btn" id="log-pause-btn" onclick="toggleLogPause()">⏸</button>
       </div>
@@ -1113,12 +1119,14 @@ function renderBubbles(tvs, selected, playingTitle) {
 // ── 日志（独立页：走 /api/logs，辅助调试）──
 let lastLogs = [];
 let logFilter = '';
+let logLevel = '';
 let logPaused = false;
 async function pollLogs() {
   if(logPaused) return;
   try {
     const q = logFilter ? '&q='+encodeURIComponent(logFilter) : '';
-    const r = await fetch('/api/logs?n=200'+(q?('&q='+encodeURIComponent(q)) : ''));
+    const lv = logLevel ? '&level='+encodeURIComponent(logLevel) : '';
+    const r = await fetch('/api/logs?n=200'+q+lv);
     const d = await r.json();
     const el = document.getElementById('log-list');
     if(!el) return;

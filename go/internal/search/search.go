@@ -90,6 +90,7 @@ func New(cfg Config) *Aggregator {
 // Search 聚合搜索：bing → so → baidu，去重，返回结果。
 // 每个引擎失败（验证码/网络/空结果）自动换下一个；全部失败返回聚合错误。
 func (a *Aggregator) Search(ctx context.Context, query string) ([]Result, error) {
+	// 并发跑所有引擎（提速：3 引擎同时，不再串行 + 退避）
 	engines := []struct {
 		name string
 		fn   func(context.Context, string) ([]Result, error)
@@ -98,32 +99,47 @@ func (a *Aggregator) Search(ctx context.Context, query string) ([]Result, error)
 		{"so", a.search360},
 		{"baidu", a.searchBaidu},
 	}
+	type engRes struct {
+		name string
+		rs   []Result
+		err  error
+	}
+	ch := make(chan engRes, len(engines))
+	for _, eng := range engines {
+		go func(eng struct {
+			name string
+			fn   func(context.Context, string) ([]Result, error)
+		}) {
+			rs, err := eng.fn(ctx, query)
+			ch <- engRes{eng.name, rs, err}
+		}(eng)
+	}
+
 	seen := map[string]bool{}
 	var all []Result
 	var errs []string
-	// 真聚合：跑完所有引擎，各自贡献，URL 去重（不再因某引擎有结果就 break）。
-	for _, eng := range engines {
-		rs, err := eng.fn(ctx, query)
-		if err != nil {
-			errs = append(errs, err.Error())
+	captcha := false
+	for range engines {
+		res := <-ch
+		if res.err != nil {
+			// 验证码特征：立即标记（不死磕，收完其他在跑引擎后返回报告）。
+			if errors.Is(res.err, ErrCaptcha) {
+				captcha = true
+			}
+			errs = append(errs, res.err.Error())
 		}
-		for _, r := range rs {
-			// 搜"盗版站"只要盗版站结果：过滤掉正版平台（B站/优酷/爱奇艺等）。
-			// B站 是独立链路（bili 包），不跟盗版站混。
-			if r.URL == "" || seen[r.URL] || isLegitSite(r.URL) {
+		for _, r := range res.rs {
+			// 原样召回：不过滤正版站（用户要求不过滤，B站等原样带回），只去空/去重。
+			if r.URL == "" || seen[r.URL] {
 				continue
 			}
 			seen[r.URL] = true
 			all = append(all, r)
 		}
-		// 引擎间退避（避免撞反爬）
-		if eng.name != engines[len(engines)-1].name {
-			select {
-			case <-ctx.Done():
-				return all, ctx.Err()
-			case <-time.After(a.cfg.Delay):
-			}
-		}
+	}
+	// 任一引擎触发验证码：立即返回报告（need_browser），不死磕其他引擎（已收完在跑的）。
+	if captcha && len(all) == 0 {
+		return nil, fmt.Errorf("%w", ErrCaptcha)
 	}
 	// 有结果则返回（可能部分引擎失败）；全失败才报错。
 	if len(all) == 0 {
@@ -225,7 +241,12 @@ func (a *Aggregator) searchBing(ctx context.Context, query string) ([]Result, er
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("bing: HTTP %d", resp.StatusCode)
 	}
-	doc, err := xhtml.Parse(resp.Body)
+	body := readBody(resp)
+	// 验证码/安全验证特征：立即返回（不死磕），handler 识别后走 WebView 兑底。
+	if isCaptcha(body) {
+		return nil, fmt.Errorf("bing: %w", ErrCaptcha)
+	}
+	doc, err := xhtml.Parse(strings.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("bing: 解析失败: %w", err)
 	}
@@ -319,6 +340,10 @@ func (a *Aggregator) search360(ctx context.Context, query string) ([]Result, err
 	body := readBody(resp)
 	if strings.TrimSpace(body) == "" {
 		return nil, fmt.Errorf("so: 空响应（非中国 IP / 被拦）")
+	}
+	// 验证码/安全验证特征：立即返回（不死磕），handler 识别后走 WebView 兑底。
+	if isCaptcha(body) {
+		return nil, fmt.Errorf("so: %w", ErrCaptcha)
 	}
 	// XPath 语义：//li[contains(@class,"res-list")] → h3.res-title/a → @data-mdurl + 标题
 	doc, err := xhtml.Parse(strings.NewReader(body))
@@ -443,7 +468,7 @@ func (a *Aggregator) searchBaidu(ctx context.Context, query string) ([]Result, e
 	}
 	body := readBody(resp)
 	if isCaptcha(body) {
-		return nil, fmt.Errorf("baidu: 触发安全验证")
+		return nil, fmt.Errorf("baidu: %w", ErrCaptcha)
 	}
 	// data-log='{"mu":"真实URL"}' → mu（兼容单引号）
 	var rs []Result
@@ -483,6 +508,10 @@ func baiduMu(raw string) string {
 }
 
 // ── 工具 ──
+
+// ErrCaptcha 验证码/安全验证特征：搜索引擎触发反爬验证码。
+// 检测到立即返回（不重试/不死磕），handler 识别后返回 need_browser 报告，前端走 WebView 兑底。
+var ErrCaptcha = errors.New("触发安全验证（验证码）")
 
 var (
 	// 百度 data-log：兼容单引号 data-log='{"mu":...}'（移动版用单引号）

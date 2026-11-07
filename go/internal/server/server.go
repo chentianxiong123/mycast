@@ -190,7 +190,7 @@ func New(opts Options) *Instance {
 		e := sniff.New(cfg)
 		eps, err := e.ExtractURL(u)
 		if err != nil {
-			Logf("[sniff] 失败 url=%s err=%v need_browser=%v", u, err, errors.Is(err, sniff.ErrNeedsBrowser))
+			LogError("[sniff] 失败 url=%s err=%v need_browser=%v", u, err, errors.Is(err, sniff.ErrNeedsBrowser))
 			writeJSON(w, map[string]any{"ok": false, "msg": err.Error(), "need_browser": errors.Is(err, sniff.ErrNeedsBrowser)})
 			return
 		}
@@ -221,7 +221,7 @@ func New(opts Options) *Instance {
 		Logf("[cast] 拿流+投屏 url=%s title=%s", u, title)
 		st, err := src.CastWith(rq.Context())
 		if err != nil {
-			Logf("[cast] 失败 url=%s err=%v", u, err)
+			LogError("[cast] 失败 url=%s err=%v", u, err)
 			writeJSON(w, map[string]any{"ok": false, "msg": err.Error()})
 			return
 		}
@@ -284,6 +284,8 @@ func New(opts Options) *Instance {
 		// 搜索引擎：webview 渲染优先（渲染窗口加载引擎页，JS fetch 回传 outerHTML），
 		// 渲染不可用时走 fetch 后备。
 		enabled := search.EnabledEngines() // 配置开关
+		start := time.Now()
+		LogInfo("[search] q=%s engines=%v 开始", q, enabled)
 		if inst.WebviewRender != nil {
 			inst.searchMu.Lock()
 			inst.searchResult = nil
@@ -292,6 +294,7 @@ func New(opts Options) *Instance {
 				inst.WebviewRender(eng.URL)
 				if rs := inst.waitSearchResult(20 * time.Second); len(rs) > 0 {
 					inst.recordSearch(q)
+					LogInfo("[search] q=%s via=webview engine=%s 结果=%d 耗时=%s", q, eng.Name, len(rs), time.Since(start).Round(time.Millisecond))
 					writeJSON(w, map[string]any{"ok": true, "query": q, "results": rs, "via": "webview", "engine": eng.Name})
 					return
 				}
@@ -300,7 +303,10 @@ func New(opts Options) *Instance {
 		// fetch 后备（webview 渲染不可用）：按配置过滤引擎。
 		rs, err := inst.Search.Search(rq.Context(), q)
 		if err != nil {
-			writeJSON(w, map[string]any{"ok": false, "msg": err.Error(), "need_browser": true, "query": q})
+			LogWarn("[search] q=%s 失败 err=%v 耗时=%s", q, err, time.Since(start).Round(time.Millisecond))
+			// 只有验证码特征才 need_browser（走 WebView 兑底）；其他错误是真失败。
+			needBrowser := errors.Is(err, search.ErrCaptcha)
+			writeJSON(w, map[string]any{"ok": false, "msg": err.Error(), "need_browser": needBrowser, "query": q})
 			return
 		}
 		// 按启用引擎过滤（config 控制所有路径）
@@ -314,6 +320,11 @@ func New(opts Options) *Instance {
 			rs = f
 		}
 		inst.recordSearch(q)
+		if len(rs) == 0 {
+			LogWarn("[search] q=%s 结果=0（引擎有结果但全被过滤/触发验证码）", q)
+		} else {
+			LogInfo("[search] q=%s via=fetch 结果=%d 耗时=%s", q, len(rs), time.Since(start).Round(time.Millisecond))
+		}
 		writeJSON(w, map[string]any{"ok": true, "query": q, "results": rs})
 	})
 
@@ -361,7 +372,7 @@ func New(opts Options) *Instance {
 		}
 		q := rq.URL.Query().Get("query")
 		if errq := rq.URL.Query().Get("err"); errq != "" {
-			Logf("[search/render] JS 错误! engine=%s err=%s", engine, errq)
+			LogError("[search/render] JS 错误! engine=%s err=%s", engine, errq)
 		}
 		Logf("[search/render] POST html=%dB engine=%s url=%s", len(htmlText), engine, u)
 		rs := inst.Search.ParseRendered(htmlText, u, engine)
@@ -481,7 +492,8 @@ func New(opts Options) *Instance {
 	mux.HandleFunc("/api/logs", func(w http.ResponseWriter, rq *http.Request) {
 		n := 0
 		fmt.Sscanf(rq.URL.Query().Get("n"), "%d", &n)
-		lines := ReadLog(n)
+		level := strings.TrimSpace(rq.URL.Query().Get("level"))
+		lines := ReadLog(n, level)
 		if q := strings.TrimSpace(rq.URL.Query().Get("q")); q != "" {
 			var f []string
 			for _, l := range lines {
@@ -552,31 +564,18 @@ func New(opts Options) *Instance {
 	return inst
 }
 
-// logRequests 给每个 HTTP 请求打一行访问日志（诊断 DLNA 客户端行为用）
-// 跳过 UI 自己的高频轮询，避免刷屏
+// logRequests 中间件：只做 panic 恢复，不打 http 访问日志（避免刷屏/到处塞）。
+// 关键链路（搜索/嗅探/投屏/配置）各自有独立 [search]/[sniff]/[cast]/[config] 日志。
 func logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, rq *http.Request) {
-		p := rq.URL.Path
-		quiet := p == "/ui" || p == "/favicon.ico" || strings.HasPrefix(p, "/api/")
-		if quiet {
-			next.ServeHTTP(w, rq)
-			return
-		}
-		rec := &statusRecorder{ResponseWriter: w, code: http.StatusOK}
-		next.ServeHTTP(rec, rq)
-		Logf("[http] %s %s from %s ua=%q -> %d",
-			rq.Method, rq.URL.RequestURI(), rq.RemoteAddr, rq.UserAgent(), rec.code)
+		defer func() {
+			if p := recover(); p != nil {
+				LogError("[panic] %s %s: %v", rq.Method, rq.URL.Path, p)
+				w.WriteHeader(http.StatusInternalServerError)
+			}
+		}()
+		next.ServeHTTP(w, rq)
 	})
-}
-
-type statusRecorder struct {
-	http.ResponseWriter
-	code int
-}
-
-func (s *statusRecorder) WriteHeader(code int) {
-	s.code = code
-	s.ResponseWriter.WriteHeader(code)
 }
 
 // newUUID 生成合法的 RFC4122 v4 UUID（部分 DLNA 客户端会校验 USN 里的 UUID 格式）
@@ -696,7 +695,7 @@ func initConfig() {
 	}
 	b, _ := json.MarshalIndent(defaultConfig, "", "  ")
 	if err := os.WriteFile(configPath, b, 0644); err != nil {
-		Logf("[config] 写入默认配置失败: %v", err)
+		LogWarn("[config] 写入默认配置失败: %v", err)
 	} else {
 		Logf("[config] 创建默认配置 %s（只开 baidu）", configPath)
 	}
