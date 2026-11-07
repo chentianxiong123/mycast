@@ -108,6 +108,7 @@ type Options struct {
 // New 组装全部 handler 并启动后台服务（SSDP 广播 + NVA TCP）。
 // 调用方负责把返回的 Handler 挂到 http.Server 上。
 func New(opts Options) *Instance {
+	CaptureLog() // 捕获全局 log（搜索/嗅探/拿流/投屏 → /api/logs 辅助调试）
 	port := opts.Port
 	if port == "" {
 		port = Port
@@ -180,6 +181,7 @@ func New(opts Options) *Instance {
 			writeJSON(w, map[string]any{"ok": false, "msg": "缺少 url"})
 			return
 		}
+		log.Printf("[sniff] 提取集数 url=%s", u)
 		// 防盗链：从请求头透传 Referer/UA（盗版站不能猜）
 		cfg := sniff.Default()
 		if ref := rq.Header.Get("Referer"); ref != "" {
@@ -188,9 +190,11 @@ func New(opts Options) *Instance {
 		e := sniff.New(cfg)
 		eps, err := e.ExtractURL(u)
 		if err != nil {
+			log.Printf("[sniff] 失败 url=%s err=%v need_browser=%v", u, err, errors.Is(err, sniff.ErrNeedsBrowser))
 			writeJSON(w, map[string]any{"ok": false, "msg": err.Error(), "need_browser": errors.Is(err, sniff.ErrNeedsBrowser)})
 			return
 		}
+		log.Printf("[sniff] 成功 url=%s 集数=%d", u, len(eps))
 		// 抓封面图（学 OnScreen artwork，但抓盗版站详情页图）
 		poster := ""
 		if htmlText, ferr := e.Fetch(u); ferr == nil {
@@ -214,11 +218,14 @@ func New(opts Options) *Instance {
 			PlayURL: u,
 			Title:   title,
 		}
+		log.Printf("[cast] 拿流+投屏 url=%s title=%s", u, title)
 		st, err := src.CastWith(rq.Context())
 		if err != nil {
+			log.Printf("[cast] 失败 url=%s err=%v", u, err)
 			writeJSON(w, map[string]any{"ok": false, "msg": err.Error()})
 			return
 		}
+		log.Printf("[cast] 成功 url=%s mime=%s ref=%s", st.URL, st.Mime, st.Headers["Referer"])
 		ref := st.Headers["Referer"]
 		// 记入「最近在看」（首页一键续看）
 		if title != "" {
@@ -435,6 +442,22 @@ func New(opts Options) *Instance {
 		source := rq.URL.Query().Get("source")
 		inst.Library.Fav(title, u, poster, source)
 		writeJSON(w, map[string]any{"ok": true, "fav": true})
+	})
+	// 日志（辅助调试）：?n=条数（默认全部）&q=关键词过滤
+	mux.HandleFunc("/api/logs", func(w http.ResponseWriter, rq *http.Request) {
+		n := 0
+		fmt.Sscanf(rq.URL.Query().Get("n"), "%d", &n)
+		lines := logBuf.Logs(n)
+		if q := strings.TrimSpace(rq.URL.Query().Get("q")); q != "" {
+			var f []string
+			for _, l := range lines {
+				if strings.Contains(strings.ToLower(l), strings.ToLower(q)) {
+					f = append(f, l)
+				}
+			}
+			lines = f
+		}
+		writeJSON(w, map[string]any{"ok": true, "logs": lines})
 	})
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, map[string]any{

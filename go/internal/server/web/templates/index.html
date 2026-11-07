@@ -425,7 +425,7 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
     </div>
     <div class="card">
       <h2>日志</h2>
-      <div class="logs" id="logs"></div>
+      <button class="btn pri big-btn" onclick="goPage('logs')" style="margin-top:8px">📋 查看运行日志</button>
     </div>
     <div class="card">
       <h2>关于</h2>
@@ -458,6 +458,23 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
   </div>
 </div>
 
+<!-- ═══════════ 日志（独立页）═══════════ -->
+  <div class="page" id="page-logs">
+    <div class="card">
+      <h2>📋 运行日志</h2>
+      <div style="display:flex;gap:8px;margin-bottom:8px;align-items:center;flex-wrap:wrap">
+        <input class="inp" id="log-filter" placeholder="关键词过滤…" style="flex:1;min-width:100px" oninput="renderLogFilter()">
+        <button class="btn gh" onclick="clearLogs()" style="font-size:12px;padding:0 10px;height:34px">清空</button>
+        <button class="btn gh" id="log-pause-btn" onclick="toggleLogPause()" style="font-size:12px;padding:0 10px;height:34px">⏸ 暂停</button>
+      </div>
+      <div class="logs" id="logs-full" style="max-height:60vh"></div>
+    </div>
+    <div class="card">
+      <h2>📊 系统信息</h2>
+      <div id="sys-info" class="dim" style="padding:6px 0;line-height:1.8;font-size:13px">加载中…</div>
+    </div>
+  </div>
+
 <!-- ═══════════ 底部导航 ═══════════ -->
 <nav class="tabbar">
   <div class="tab active" data-page="search" onclick="goPage('search')"><span class="ti">🔍</span><span class="tt">搜索</span></div>
@@ -465,6 +482,7 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
   <div class="tab" data-page="dock" onclick="goPage('dock')"><span class="ti tbadge" id="tab-dock-ic">🎮</span><span class="tt">遥控器</span></div>
   <div class="tab" data-page="dev" onclick="goPage('dev')"><span class="ti">📺</span><span class="tt">设备</span></div>
   <div class="tab" data-page="set" onclick="goPage('set')"><span class="ti">⚙️</span><span class="tt">设置</span></div>
+  <div class="tab" data-page="logs" onclick="goPage('logs')"><span class="ti">📋</span><span class="tt">日志</span></div>
 </nav>
 
 <script>
@@ -477,6 +495,7 @@ function goPage(p) {
   document.querySelectorAll('.page').forEach(x => x.classList.toggle('active', x.id === 'page-'+p));
   document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x.dataset.page === p));
   if(p === 'set') loadCookies(); // 进设置页刷新账号固化状态
+  if(p === 'logs') pollLogs();
   if(p === 'library') loadLibrary(); // 进媒体库页刷继续观看+海报墙
   if(p !== 'search') document.getElementById('page-episodes').classList.add('hidden'); // 离开搜索：episodes 子页收起
   if(p === 'search' && window._firstSearchGo) { /* 已开 */ } else if(p === 'search') { window._firstSearchGo=1; const q=document.getElementById('search-q'); if(q) setTimeout(()=>q.focus(), 80); }
@@ -1124,20 +1143,45 @@ function renderBubbles(tvs, selected, playingTitle) {
   el.innerHTML = html;
 }
 
-// ── 日志 ──
-let lastLogs = [];
+// ── 日志（独立页：/api/logs ?n=&q= 过滤 + 自动滚动 + 暂停）──
+let logBuf = [];
+let logPaused = false;
+let lastLogSig = '';
 async function pollLogs() {
+  if(logPaused) return;
   try {
-    const r = await fetch('/api/status');
+    const r = await fetch('/api/logs?n=200');
     const d = await r.json();
-    const el = document.getElementById('logs');
-    const logs = d.logs || [];
-    if(JSON.stringify(logs) !== JSON.stringify(lastLogs)) {
-      lastLogs = logs;
-      el.innerHTML = logs.map(l=>'<div>'+l.replace(/</g,'&lt;')+'</div>').join('');
-      el.scrollTop = el.scrollHeight;
-    }
+    logBuf = d.logs || [];
+    renderLogView();
   } catch(e){}
+}
+function renderLogView() {
+  const el = document.getElementById('logs-full');
+  if(!el) return;
+  const sig = logBuf.join('\n');
+  if(sig === lastLogSig) return;
+  lastLogSig = sig;
+  el.innerHTML = logBuf.map(l=>'<div>'+l.replace(/</g,'&lt;')+'</div>').join('');
+  el.scrollTop = el.scrollHeight;
+}
+function renderLogFilter() {
+  const q = (document.getElementById('log-filter')||{}).value || '';
+  const el = document.getElementById('logs-full');
+  if(!el) return;
+  const src = q ? logBuf.filter(l=>l.toLowerCase().includes(q.toLowerCase())) : logBuf;
+  el.innerHTML = src.map(l=>'<div>'+l.replace(/</g,'&lt;')+'</div>').join('');
+  el.scrollTop = el.scrollHeight;
+}
+function clearLogs() {
+  logBuf = []; lastLogSig = '';
+  const el = document.getElementById('logs-full');
+  if(el) el.innerHTML = '<div class="dim">日志已清空（仅前端，后端缓冲保留）</div>';
+}
+function toggleLogPause() {
+  logPaused = !logPaused;
+  const btn = document.getElementById('log-pause-btn');
+  if(btn) btn.textContent = logPaused ? '▶ 继续' : '⏸ 暂停';
 }
 
 // ── 初始化 ──
