@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -65,6 +66,9 @@ type Instance struct {
 
 	// 账号固化（cookie 持久化，登录后 WebView 注入复用）
 	Cookies *CookieStore
+
+	// 收藏库（媒体库元信息持久化：纯流媒体源索引，不存文件）
+	Library *Library
 }
 
 // RecentItem 一条最近播放记录（首页「最近在看」一键续看）
@@ -176,6 +180,7 @@ func New(opts Options) *Instance {
 		dataDir = filepath.Join(os.Getenv("HOME"), "data")
 	}
 	inst.Cookies = NewCookieStore(dataDir)
+	inst.Library = NewLibrary(dataDir)
 
 	mux := http.NewServeMux()
 	mux.Handle("/", r.Handler())
@@ -221,7 +226,12 @@ func New(opts Options) *Instance {
 			writeJSON(w, map[string]any{"ok": false, "msg": err.Error(), "need_browser": errors.Is(err, sniff.ErrNeedsBrowser)})
 			return
 		}
-		writeJSON(w, map[string]any{"ok": true, "url": u, "episodes": eps})
+		// 抓封面图（学 OnScreen artwork，但抓盗版站详情页图）
+		poster := ""
+		if htmlText, ferr := e.Fetch(u); ferr == nil {
+			poster = e.ExtractPoster(htmlText, u)
+		}
+		writeJSON(w, map[string]any{"ok": true, "url": u, "episodes": eps, "poster": poster})
 	})
 
 	// 盗版站闭环：播放页 URL → 拿流(m3u8/mp4) → 投屏。妈妈操作 2 的最后一段。
@@ -406,6 +416,36 @@ func New(opts Options) *Instance {
 		_ = inst.Cookies.Clear(engine)
 		writeJSON(w, map[string]any{"ok": true})
 	})
+
+	// ── 收藏库（媒体库元信息持久化：纯流媒体源索引）──
+
+	// 封面图代理（防盗链）
+	mux.HandleFunc("/api/poster", inst.posterProxy)
+
+
+	// 收藏列表
+	mux.HandleFunc("/api/library", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, map[string]any{"ok": true, "items": inst.Library.List()})
+	})
+
+	// 收藏/取消收藏
+	mux.HandleFunc("/api/library/fav", func(w http.ResponseWriter, rq *http.Request) {
+		title := rq.URL.Query().Get("title")
+		u := rq.URL.Query().Get("url")
+		if title == "" || u == "" {
+			writeJSON(w, map[string]any{"ok": false, "msg": "缺少 title/url"})
+			return
+		}
+		if rq.URL.Query().Get("unfav") == "1" {
+			inst.Library.Unfav(u)
+			writeJSON(w, map[string]any{"ok": true, "fav": false})
+			return
+		}
+		poster := rq.URL.Query().Get("poster")
+		source := rq.URL.Query().Get("source")
+		inst.Library.Fav(title, u, poster, source)
+		writeJSON(w, map[string]any{"ok": true, "fav": true})
+	})
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, map[string]any{
 			"base_url": baseURL,
@@ -540,6 +580,40 @@ func tvList() []*ssdp.Device {
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// /api/poster?url=<封面图>&ref=<站点域名> 代理封面图（绕过防盗链：带站点 Referer）。
+func (inst *Instance) posterProxy(w http.ResponseWriter, rq *http.Request) {
+	u := rq.URL.Query().Get("url")
+	if u == "" {
+		http.Error(w, "missing url", http.StatusBadRequest)
+		return
+	}
+	ref := rq.URL.Query().Get("ref")
+	if ref == "" {
+		if uu, err := url.Parse(u); err == nil {
+			ref = uu.Scheme + "://" + uu.Host + "/"
+		}
+	}
+	req, err := http.NewRequestWithContext(rq.Context(), http.MethodGet, u, nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	req.Header.Set("User-Agent", sniff.Default().UA)
+	req.Header.Set("Referer", ref)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	if ct := resp.Header.Get("Content-Type"); ct != "" {
+		w.Header().Set("Content-Type", ct)
+	}
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
 }
 
 // chromeSearchFallback 桌面版兜底：系统 Chrome headless 渲染搜索引擎结果页 → 解析。

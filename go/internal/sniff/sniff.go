@@ -277,6 +277,74 @@ func (e *Extractor) Extract(htmlText, baseURL string) []Episode {
 	return eps
 }
 
+// ExtractPoster 从详情页 HTML 提取封面图 URL（学 OnScreen artwork，但抓站点图）。
+// 策略：og:image meta → img[poster/cover/data-src/lazy] → 含 cover/poster/pic class 的大 img。
+func (e *Extractor) ExtractPoster(htmlText, baseURL string) string {
+	doc, err := html.Parse(strings.NewReader(htmlText))
+	if err != nil {
+		return ""
+	}
+	base, _ := url.Parse(baseURL)
+	var best string
+	var bestScore int
+
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode {
+			if n.Data == "meta" {
+				// og:image
+				if strings.EqualFold(getAttr(n, "property"), "og:image") || strings.EqualFold(getAttr(n, "name"), "og:image") {
+					if c := getAttr(n, "content"); c != "" {
+						best, bestScore = c, 100
+					}
+				}
+			} else if n.Data == "img" {
+				src := firstNonEmpty(getAttr(n, "data-src"), getAttr(n, "data-original"),
+					getAttr(n, "data-lazy-src"), getAttr(n, "src"), getAttr(n, "poster"))
+				if src == "" {
+					for _, c := range n.Attr {
+						if c.Key == "src" || strings.Contains(c.Key, "src") {
+							if strings.HasPrefix(c.Val, "http") {
+								src = c.Val
+								break
+							}
+						}
+					}
+				}
+				if src != "" {
+					cls := getAttr(n, "class")
+					score := 1
+					if strings.Contains(cls, "cover") || strings.Contains(cls, "poster") || strings.Contains(cls, "pic") {
+						score = 80
+					} else if strings.Contains(cls, "lazy") || strings.Contains(cls, "thumb") {
+						score = 60
+					}
+					if score > bestScore {
+						best, bestScore = src, score
+					}
+				}
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(doc)
+	if best == "" {
+		return ""
+	}
+	return resolveHref(base, best)
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // NeedsBrowser 检测页面是否需要浏览器内核（JS 挑战/指纹反爬）。
 // 纯 HTTP 拿不到真实内容，需要 WebView 兜底。
 func NeedsBrowser(htmlText string) bool {
