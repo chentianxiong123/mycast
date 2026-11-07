@@ -37,7 +37,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libwebkitgtk-6.0-4 \
+            libwebkitgtk-6.0-dev \
+            libjavascriptcoregtk-6.0-dev \
+            libsoup-3.0-dev \
             libgtk-4-dev \
             libgtk-4-1 \
             xvfb \
@@ -46,8 +48,9 @@ jobs:
             xdotool \
             imagemagick \
             dbus-x11
-          # 确认 webkit 6.0 库装好
-          ldconfig -p | grep -i webkitgtk-6.0 || echo "警告：webkitgtk-6.0 未找到"
+          # 确认 webkit 6.0 的 .pc 装好（pkg-config 编译 wails3 需要）
+          pkg-config --exists webkitgtk-6.0 && echo "webkitgtk-6.0.pc OK" || echo "警告：webkitgtk-6.0.pc 未找到"
+          pkg-config --exists libsoup-3.0 && echo "libsoup-3.0.pc OK" || echo "警告：libsoup-3.0.pc 未找到"
 
       - name: 后端单元测试（含模板骨架，防黑屏）
         run: |
