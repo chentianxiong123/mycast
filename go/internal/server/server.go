@@ -55,6 +55,9 @@ type Instance struct {
 	searchMu     sync.Mutex
 	searchResult []search.Result
 	searchQuery  string
+	// WebviewRender 桌面注入（wails3 壳渲染窗口 SetURL，触发 JS 回传 outerHTML）。
+	// 非 nil = 桌面（有 webview 渲染）；nil = Android（前端 window.hc）。
+	WebviewRender func(url string)
 
 	// 最近在看（历史记录，最多 5 条）
 	recentMu sync.Mutex
@@ -275,12 +278,18 @@ func New(opts Options) *Instance {
 			writeJSON(w, map[string]any{"ok": false, "msg": "缺少关键词"})
 			return
 		}
-		// 用户决策：搜索引擎用浏览器渲染（fetch 被反爬：Accept-Encoding 不解压/验证码/UA 坑）。
-		// 浏览器优先（稳），fetch 后备（浏览器不可用时）。
-		if brs, _, berr := inst.Search.BrowserSearch(rq.Context(), q); len(brs) > 0 && berr == nil {
-			writeJSON(w, map[string]any{"ok": true, "query": q, "results": brs, "via": "browser"})
-			return
+		// 用户决策：搜索引擎全走 webview（跨端：桌面 wails3 WebKitGTK 渲染窗口 / Android 系统 WebView），
+		// 不再依赖无头 Chrome（不跨端不通用）。fetch 仅后备（非无头 Chrome）。
+		if inst.WebviewRender != nil {
+			for _, eng := range search.BrowserEngines(q, search.EnabledEngines()) {
+				inst.WebviewRender(eng.URL) // 渲染窗口 SetURL → JS fetch 回传 outerHTML → ParseRendered 存 searchResult
+				if rs := inst.waitSearchResult(20 * time.Second); len(rs) > 0 {
+					writeJSON(w, map[string]any{"ok": true, "query": q, "results": rs, "via": "webview", "engine": eng.Name})
+					return
+				}
+			}
 		}
+		// fetch 后备（webview 失败/Android 无渲染窗口）：非无头 Chrome。
 		rs, err := inst.Search.Search(rq.Context(), q)
 		if err != nil {
 			writeJSON(w, map[string]any{"ok": false, "msg": err.Error(), "need_browser": true, "query": q})
@@ -291,21 +300,38 @@ func New(opts Options) *Instance {
 
 	// 搜索 WebView 兜底：JS 拿搜索引擎结果页 outerHTML → POST 回来解析（学 sniff/render）
 	mux.HandleFunc("/api/search/render", func(w http.ResponseWriter, rq *http.Request) {
+		// CORS：搜索引擎页（so.com/baidu/bing 域）的 JS fetch 跨域回传 outerHTML 到本机后端。
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if rq.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		if rq.Method != http.MethodPost {
 			writeJSON(w, map[string]any{"ok": false, "msg": "需要 POST"})
 			return
 		}
-		rq.ParseForm()
-		htmlText := rq.PostFormValue("html")
-		u := rq.PostFormValue("url")
-		q := rq.PostFormValue("query")
+		// HTML 来源二选一：body 文本（JS fetch 直传 outerHTML）或 form（Android Java POST）。
+		htmlText := ""
+		engine := rq.URL.Query().Get("engine")
+		u := rq.URL.Query().Get("url")
+		if strings.Contains(rq.Header.Get("Content-Type"), "text/plain") {
+			b, _ := io.ReadAll(rq.Body)
+			htmlText = string(b)
+		} else {
+			rq.ParseForm()
+			htmlText = rq.PostFormValue("html")
+			if u == "" {
+				u = rq.PostFormValue("url")
+			}
+		}
 		if htmlText == "" {
 			writeJSON(w, map[string]any{"ok": false, "msg": "缺少 html"})
 			return
 		}
-		// 用 search 的解析逻辑解析渲染后的 HTML（复用三引擎各自的解析器）
-		engine := "webview"
-		if u != "" {
+		// 用 search 的解析逻辑解析渲染后的 HTML（复用三引擎各自的解析器）。
+		if engine == "" && u != "" {
 			if strings.Contains(u, "so.com") {
 				engine = "so"
 			} else if strings.Contains(u, "baidu") {
@@ -314,6 +340,11 @@ func New(opts Options) *Instance {
 				engine = "bing"
 			}
 		}
+		q := rq.URL.Query().Get("query")
+		if errq := rq.URL.Query().Get("err"); errq != "" {
+			log.Printf("[search/render] JS 错误! engine=%s err=%s", engine, errq)
+		}
+		log.Printf("[search/render] POST html=%dB engine=%s url=%s", len(htmlText), engine, u)
 		rs := inst.Search.ParseRendered(htmlText, u, engine)
 		inst.searchMu.Lock()
 		inst.searchResult = rs
@@ -534,6 +565,24 @@ func tvList() []*ssdp.Device {
 		tvMu.Unlock()
 	}()
 	return cached // 首次可能 nil，立即返回
+}
+
+// waitSearchResult 轮询等 webview 渲染回传的搜索（JS fetch POST /api/search/render → ParseRendered 存 searchResult）。
+func (s *Instance) waitSearchResult(timeout time.Duration) []search.Result {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		s.searchMu.Lock()
+		rs := s.searchResult
+		if rs != nil {
+			s.searchResult = nil
+			s.searchQuery = ""
+			s.searchMu.Unlock()
+			return rs
+		}
+		s.searchMu.Unlock()
+		time.Sleep(400 * time.Millisecond)
+	}
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

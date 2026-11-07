@@ -8,11 +8,15 @@ package search
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
+
+const configPath = "/mnt/shared/mycast/config.json"
 
 // 浏览器渲染错误。
 var (
@@ -26,14 +30,53 @@ type BrowserEngine struct {
 	URL  string // 搜索 URL
 }
 
-// BrowserEngines 搜索引擎列表（浏览器渲染用，顺序即优先级）。
-func BrowserEngines(query string) []BrowserEngine {
-	q := url.QueryEscape(query)
+// allEngines 全部搜索引擎（顺序即优先级）。
+func allEngines(q string) []BrowserEngine {
+	q = url.QueryEscape(q)
 	return []BrowserEngine{
 		{"so", "https://www.so.com/s?q=" + q},
 		{"baidu", "https://www.baidu.com/s?wd=" + q},
 		{"bing", "https://www.bing.com/search?q=" + q},
 	}
+}
+
+// BrowserEngines 启用的搜索引擎（enabled 为 nil=全开；否则按 name 过滤）。
+// 配置开关：config.json search_engines 控制。
+func BrowserEngines(query string, enabled []string) []BrowserEngine {
+	if enabled == nil {
+		return allEngines(query)
+	}
+	set := map[string]bool{}
+	for _, e := range enabled {
+		set[e] = true
+	}
+	var out []BrowserEngine
+	for _, eng := range allEngines(query) {
+		if set[eng.Name] {
+			out = append(out, eng)
+		}
+	}
+	return out
+}
+
+// EnabledEngines 读取 config.json 的 search_engines 开关（nil=全开）。
+func EnabledEngines() []string {
+	b, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil // 无配置=全开
+	}
+	var m map[string]any
+	if json.Unmarshal(b, &m) != nil {
+		return nil
+	}
+	arr, _ := m["search_engines"].([]any)
+	var out []string
+	for _, v := range arr {
+		if s, ok := v.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // BrowserSearch 浏览器渲染搜索（框架入口）：
@@ -46,7 +89,7 @@ func (a *Aggregator) BrowserSearch(ctx context.Context, query string) ([]Result,
 	}
 	seen := map[string]bool{}
 	var all []Result
-	for _, eng := range BrowserEngines(query) {
+	for _, eng := range BrowserEngines(query, EnabledEngines()) {
 		html, err := RenderWithChrome(ctx, eng.URL, 18*time.Second)
 		if err != nil || strings.TrimSpace(html) == "" {
 			continue
