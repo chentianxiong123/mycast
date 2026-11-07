@@ -77,6 +77,9 @@ body{
 .hero-q{font-size:20px;font-weight:800;margin-bottom:10px}
 .big-inp{height:46px;font-size:15px;border-radius:12px}
 .big-btn{height:46px;font-size:14px;padding:0 22px;border-radius:12px}
+.big-search{font-size:19px;padding:16px;border-radius:14px;margin:4px 0 8px}
+.hero-sub{text-align:center;font-size:13px;margin-top:4px}
+
 .banner{margin-bottom:10px}
 .banner-in{display:flex;align-items:center;gap:10px;background:linear-gradient(135deg,rgba(255,77,109,.14),transparent);border:1px solid rgba(255,77,109,.35);border-radius:13px;padding:10px 12px;cursor:pointer}
 .banner-ic{font-size:22px}
@@ -288,31 +291,11 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
       </div>
     </div>
 
-    <!-- 搜索（妈妈的唯一入口）-->
+    <!-- 找片入口（大按钮，进搜索页）-->
     <div class="card">
       <div class="hero-q">想看什么？</div>
-      <div class="sniffrow">
-        <input class="inp big-inp" id="search-q" placeholder="剧名 / 关键词，如：繁花 在线观看" onkeydown="if(event.key==='Enter')searchSites()">
-        <button class="btn pri big-btn" onclick="searchSites()">搜索</button>
-      </div>
-      <div id="search-res" class="sniffeps"><div class="dim">搜剧 → 选网站 → 点集数 → 电视开播</div></div>
-    </div>
-
-    <!-- 集数（主链路：点搜索结果后出现）-->
-    <div class="card hidden" id="ep-card">
-      <div class="ep-head">
-        <span class="ep-title" id="ep-title">集数</span>
-        <span class="ep-total" id="ep-total"></span>
-      </div>
-      <div class="ep-grid" id="ep-grid"></div>
-      <div class="ep-pager" id="ep-pager"></div>
-      <div class="ep-detail hidden" id="ep-detail">
-        <div class="ep-dt" id="ep-dt">—</div>
-        <div class="ep-actions">
-          <button class="btn pri" onclick="playEp()">▶ 投屏播放</button>
-          <button class="btn gh" onclick="copyEp()">复制链接</button>
-        </div>
-      </div>
+      <button class="btn pri big-btn big-search" onclick="goPage('search')">🔍 搜想看的</button>
+      <div class="hero-sub">搜 → 选网站 → 点集数 → 电视开播</div>
     </div>
 
     <!-- 最近在看（历史，一键续看）-->
@@ -329,6 +312,34 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
         <div class="si"><div class="sl">速度</div><div class="sv dim" id="st-speed">—</div></div>
       </div>
       <div id="errbar" class="errbar hidden">—</div>
+    </div>
+  </div>
+
+  <!-- ═══════════ 搜索（独立页：搜 → 结果 → 集数 → 投屏）═══ -->
+  <div class="page" id="page-search">
+    <div class="card">
+      <div class="sniffrow">
+        <input class="inp big-inp" id="search-q" placeholder="剧名 / 关键词，如：繁花 在线观看" onkeydown="if(event.key==='Enter')searchSites()">
+        <button class="btn pri big-btn" onclick="searchSites()">搜索</button>
+      </div>
+      <div id="search-res" class="sniffeps"><div class="dim">搜剧 → 选网站 → 点集数 → 电视开播</div></div>
+    </div>
+
+    <!-- 集数（点搜索结果后出现）-->
+    <div class="card hidden" id="ep-card">
+      <div class="ep-head">
+        <span class="ep-title" id="ep-title">集数</span>
+        <span class="ep-total" id="ep-total"></span>
+      </div>
+      <div class="ep-grid" id="ep-grid"></div>
+      <div class="ep-pager" id="ep-pager"></div>
+      <div class="ep-detail hidden" id="ep-detail">
+        <div class="ep-dt" id="ep-dt">—</div>
+        <div class="ep-actions">
+          <button class="btn pri" onclick="playEp()">▶ 投屏播放</button>
+          <button class="btn gh" onclick="copyEp()">复制链接</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -450,6 +461,7 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
 <!-- ═══════════ 底部导航 ═══════════ -->
 <nav class="tabbar">
   <div class="tab active" data-page="home" onclick="goPage('home')"><span class="ti">🏠</span><span class="tt">首页</span></div>
+  <div class="tab" data-page="search" onclick="goPage('search')"><span class="ti">🔍</span><span class="tt">搜索</span></div>
   <div class="tab" data-page="library" onclick="goPage('library')"><span class="ti">🎬</span><span class="tt">媒体库</span></div>
   <div class="tab" data-page="dock" onclick="goPage('dock')"><span class="ti tbadge" id="tab-dock-ic">🎮</span><span class="tt">遥控器</span></div>
   <div class="tab" data-page="dev" onclick="goPage('dev')"><span class="ti">📺</span><span class="tt">设备</span></div>
@@ -467,6 +479,7 @@ function goPage(p) {
   document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x.dataset.page === p));
   if(p === 'set') loadCookies(); // 进设置页刷新账号固化状态
   if(p === 'library') loadLibrary(); // 进媒体库页刷继续观看+海报墙
+  if(p === 'search' && window._firstSearchGo) { /* 已开 */ } else if(p === 'search') { window._firstSearchGo=1; const q=document.getElementById('search-q'); if(q) setTimeout(()=>q.focus(), 80); }
 }
 
 // ── 账号固化（搜索引擎登录态 cookie 持久化）──
