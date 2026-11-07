@@ -299,7 +299,8 @@ func bingRealURL(href string) string {
 		return href
 	}
 	enc := u[2:]
-	enc += strings.Repeat("=", (-len(enc))%4)
+	// base64 填充：保证 0-3（Go % 对负数返回负，会 panic strings.Repeat 负数）。
+	enc += strings.Repeat("=", (4-len(enc)%4)%4)
 	b, err := base64.URLEncoding.DecodeString(enc)
 	if err != nil {
 		return href
