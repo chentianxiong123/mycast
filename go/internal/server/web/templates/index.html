@@ -233,6 +233,21 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
 .poster-img{width:110px;height:155px;border-radius:10px;background:var(--card2);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:36px;font-weight:800;color:var(--acc)}
 .poster-title{font-size:11px;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .poster-sub{font-size:9px;color:var(--dim);margin-top:1px}
+
+/* ═══════════ 详情浮层（学 OnScreen ItemDetail：封面+标题+集数网格）═══ */
+.detail-overlay{position:fixed;inset:0;z-index:60;background:var(--bg);display:flex;flex-direction:column;overflow-y:auto}
+.detail-cover{height:190px;flex-shrink:0;background:linear-gradient(135deg,var(--card2),var(--bg2));border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:72px;font-weight:900;color:var(--acc)}
+.detail-body{flex:1;padding:14px 14px 80px;overflow-y:auto}
+.detail-title{font-size:20px;font-weight:800;margin-bottom:5px}
+.detail-meta{font-size:11px;margin-bottom:12px}
+.detail-eps{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+.detail-ep{background:var(--card2);border:1px solid var(--line);border-radius:8px;padding:9px 4px;text-align:center;cursor:pointer;font-size:11px;color:var(--dim)}
+.detail-ep:active{transform:scale(.96)}
+.detail-ep.sel{background:var(--acc-soft);border-color:var(--acc);color:var(--acc);font-weight:700}
+.detail-bar{position:fixed;left:0;right:0;bottom:0;display:flex;gap:10px;padding:10px 14px;background:linear-gradient(transparent,var(--bg) 40%);z-index:61}
+.detail-bar .btn{flex:1;height:42px;border-radius:10px;font-size:14px}
+.detail-close-btn{background:var(--card2);color:var(--dim)}
+.detail-play-btn:disabled{opacity:.4}
 </style>
 </head>
 <body>
@@ -396,6 +411,20 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
   </div>
 </div>
 
+<!-- ═══════════ 详情浮层（学 OnScreen ItemDetail：封面+标题+集数网格+播放）═══ -->
+<div id="detail-overlay" class="detail-overlay hidden">
+  <div class="detail-cover" id="detail-cover">?</div>
+  <div class="detail-body">
+    <div class="detail-title" id="detail-title">…</div>
+    <div class="detail-meta dim" id="detail-meta">提取集数中…</div>
+    <div class="detail-eps" id="detail-eps"></div>
+  </div>
+  <div class="detail-bar">
+    <button class="btn pri detail-close-btn" onclick="closeDetail()">关闭</button>
+    <button class="btn gh detail-play-btn" id="detail-play" onclick="playEp()" disabled>▶ 播放</button>
+  </div>
+</div>
+
 <!-- ═══════════ 底部导航 ═══════════ -->
 <nav class="tabbar">
   <div class="tab active" data-page="home" onclick="goPage('home')"><span class="ti">🏠</span><span class="tt">首页</span></div>
@@ -535,10 +564,59 @@ async function loadLibrary() {
   } catch(e){}
 }
 
-// 详情（学 OnScreen ItemDetail）：点海报 → 嗅探集数（流媒体源）→ 跳首页集数列表播放
+// 详情（学 OnScreen ItemDetail）：点海报 → 打开详情浮层（封面+标题+集数网格）
 function openDetail(url, title) {
   if(!url) { toast('无链接', false); return; }
-  sniff(url, title); // 复用现有嗅探：拿流媒体源集数 → 首页集数列表 → 播放
+  // 打开浮层
+  const ov = document.getElementById('detail-overlay');
+  ov.classList.remove('hidden');
+  document.getElementById('detail-cover').textContent = libEmoji(title);
+  document.getElementById('detail-title').textContent = title || '…';
+  document.getElementById('detail-meta').textContent = '提取集数中…';
+  document.getElementById('detail-eps').innerHTML = '';
+  document.getElementById('detail-play').disabled = true;
+  selEp = null;
+  // 嗅探流媒体源集数
+  loadDetail(url, title);
+}
+
+async function loadDetail(url, title) {
+  try {
+    const r = await fetch('/api/sniff?url='+encodeURIComponent(url));
+    const d = await r.json();
+    if(d.ok && d.episodes && d.episodes.length) {
+      renderDetailEps(d.episodes, title||'');
+      return;
+    }
+    if(d.need_browser) {
+      document.getElementById('detail-meta').textContent = 'JS 反爬，需内置浏览器'+(window.hc? '' : '（桌面版不支持）');
+      if(window.hc && window.hc.sniffRender) { window.hc.sniffRender(url); pollSniffResult(); }
+      return;
+    }
+    document.getElementById('detail-meta').textContent = d.msg||'提取失败';
+  } catch(e) { document.getElementById('detail-meta').textContent = '网络错误: '+e.message; }
+}
+
+function renderDetailEps(eps, title) {
+  epsData = eps;
+  const grid = document.getElementById('detail-eps');
+  document.getElementById('detail-meta').textContent = '共 '+eps.length+' 集 · 流媒体源';
+  grid.innerHTML = eps.map(ep=>
+    '<div class="detail-ep" id="dep-'+ep.index+'" onclick="selectDetailEp('+ep.index+')">'+(ep.title||('第'+ep.index+'集'))+'</div>'
+  ).join('');
+}
+
+function selectDetailEp(index) {
+  const ep = (epsData||[]).find(x=>x.index===index);
+  if(!ep) return;
+  selEp = ep;
+  document.querySelectorAll('.detail-ep').forEach(x=>x.classList.toggle('sel', x.id==='dep-'+index));
+  document.getElementById('detail-play').disabled = false;
+}
+
+function closeDetail() {
+  document.getElementById('detail-overlay').classList.add('hidden');
+  selEp = null;
 }
 function epLoading(msg) {
   document.getElementById('ep-card').classList.remove('hidden');
@@ -595,13 +673,15 @@ function selectEp(idx) {
 function copyEp() { if(selEp && navigator.clipboard) { navigator.clipboard.writeText(selEp.url); toast('已复制: '+selEp.url); } }
 function playEp() {
   if(!selEp) return;
-  const t = document.getElementById('ep-title').textContent || '剧集';
-  const title = String(t).replace(/\d+集夹$/, '') + ' 第'+selEp.index+'集';
+  // 标题：详情浮层优先（媒体库点开），否则首页集数卡
+  const dt = document.getElementById('detail-title');
+  const base = (dt && !dt.classList.contains('hidden') && dt.textContent && dt.textContent!=='…') ? dt.textContent : (document.getElementById('ep-title').textContent || '剧集');
+  const title = String(base).replace(/\d+集夹$/, '') + ' 第'+selEp.index+'集';
   toast('拿流中…');
   fetch('/api/cast?url='+encodeURIComponent(selEp.url)+'&title='+encodeURIComponent(title))
     .then(r=>r.json())
     .then(d=>{
-      if(d.ok) { toast('已投屏第'+selEp.index+'集'); goPage('dock'); loadRecent(); }
+      if(d.ok) { toast('已投屏第'+selEp.index+'集'); closeDetail(); goPage('dock'); loadRecent(); }
       else toast(d.msg||'拿流失败', false);
     })
     .catch(e=>toast('错误: '+e.message, false));
