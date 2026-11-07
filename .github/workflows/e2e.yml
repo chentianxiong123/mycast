@@ -65,5 +65,10 @@ jobs:
       - name: 桌面壳 e2e（xvfb 虚拟 X，窗口渲染非黑 + 搜索 + JS 桥）
         run: |
           cd wails3/e2e
+          # WebKitGTK sandbox（bwrap/xdg-dbus-proxy）在 CI 容器里起不来 → 禁用 sandbox。
+          # （仅 CI 容器内禁用；本地/真机不开这个，安全。）
+          export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
+          export WEBKIT_DISABLE_DMABUF_RENDERER=1
+          export GTK_A11Y=none
           MYCAST_BIN=/tmp/mycast-e2e xvfb-run -a -s "-screen 0 1280x800x24" dbus-run-session -- \
             go test -v -run TestE2E -timeout 150s .
