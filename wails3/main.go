@@ -1,10 +1,11 @@
-// MyCast 桌面壳（wails3 v3）:单窗口，直载后端真实 HTTP。
+// MyCast 桌面壳（wails3 v3）：原生窗口，直载后端真实 HTTP（非 asset 桥）。
 //
-//	照搬 mymusic 已验证模式（单窗口，无渲染子窗口）：
-//	  后端 8080 → wails3 WebviewWindowOptions.URL 直载 → 原生窗口（非浏览器）
-//	  搜索引擎走后端 cookie 固化 fetch（/api/search），不另起窗口。
+//	架构（照搬 mymusic 已验证模式）：
+//	  - 后端 server.New() 监听 tcp4 0.0.0.0:8080（IPv4 明确：局域网电视 + 窗口 127.0.0.1 都能连）
+//	  - wails3 WebviewWindowOptions.URL = http://127.0.0.1:8080/ui 直载真实后端（同源，非 asset 桥）
+//	  - 不弹系统浏览器（双击即出原生窗口，像原生应用）
 //
-//	平台差异:桌面=本壳（wails3 原生窗口）；安卓=自写壳（android/，纯 aapt2）。
+//	平台差异：桌面=本壳（wails3 原生窗口）；安卓=自写壳（android/，纯 aapt2，已在真机跑通）。
 package main
 
 import (
@@ -18,6 +19,7 @@ import (
 	"mycast/internal/server"
 )
 
+// backendPort 后端 HTTP 端口（HC_PORT 覆盖）；与 server.Port 默认 8080 一致
 func backendPort() string {
 	if p := os.Getenv("HC_PORT"); p != "" {
 		return p
@@ -29,17 +31,18 @@ func main() {
 	inst := server.New(server.Options{})
 	defer inst.Stop()
 
+	// 后端监听 tcp4 0.0.0.0:8080（IPv4 明确，见 cmd/mycast/main.go 同因）
 	port := backendPort()
-	// 后端同步 listen（建窗口前必须 listen 完成，否则 WebView 发起 GET /ui 时连接被拒 → 黑屏）。
-	// serve 放 goroutine（阻塞），listen 同步返回才建窗口。
-	addr := "0.0.0.0:" + port
-	ln, err := net.Listen("tcp4", addr)
-	if err != nil {
-		log.Fatalf("[mycast] listen %s: %v", addr, err)
-	}
-	log.Printf("[mycast] http://127.0.0.1:%s/ui", port)
 	go func() {
-		if err := (&http.Server{Handler: inst.Handler, ReadHeaderTimeout: 10 * time.Second}).Serve(ln); err != nil {
+		addr := "0.0.0.0:" + port
+		ln, err := net.Listen("tcp4", addr)
+		if err != nil {
+			log.Printf("[mycast] listen %s: %v", addr, err)
+			return
+		}
+		log.Printf("[mycast] http://127.0.0.1:%s/ui", port)
+		srv := &http.Server{Handler: inst.Handler, ReadHeaderTimeout: 10 * time.Second}
+		if err := srv.Serve(ln); err != nil {
 			log.Printf("[mycast] serve: %v", err)
 		}
 	}()
@@ -57,6 +60,7 @@ func main() {
 		MinHeight:        620,
 		BackgroundColour: application.NewRGB(17, 17, 17),
 		URL:              "http://127.0.0.1:" + port + "/ui",
+		JS:               "window.hcEnv='desktop';",
 	})
 
 	if err := app.Run(); err != nil {

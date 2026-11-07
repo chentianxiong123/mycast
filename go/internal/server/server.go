@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"html/template"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -108,7 +107,7 @@ type Options struct {
 // New 组装全部 handler 并启动后台服务（SSDP 广播 + NVA TCP）。
 // 调用方负责把返回的 Handler 挂到 http.Server 上。
 func New(opts Options) *Instance {
-	CaptureLog() // 捕获全局 log（搜索/嗅探/拿流/投屏 → /api/logs 辅助调试）
+	CaptureLog() // 开独立日志文件（不劫持全局 log，不干扰 WebView）
 	initConfig() // 保证 config.json 存在（默认只开 baidu，用户可在设置页改）
 	port := opts.Port
 	if port == "" {
@@ -182,7 +181,7 @@ func New(opts Options) *Instance {
 			writeJSON(w, map[string]any{"ok": false, "msg": "缺少 url"})
 			return
 		}
-		log.Printf("[sniff] 提取集数 url=%s", u)
+		Logf("[sniff] 提取集数 url=%s", u)
 		// 防盗链：从请求头透传 Referer/UA（盗版站不能猜）
 		cfg := sniff.Default()
 		if ref := rq.Header.Get("Referer"); ref != "" {
@@ -191,11 +190,11 @@ func New(opts Options) *Instance {
 		e := sniff.New(cfg)
 		eps, err := e.ExtractURL(u)
 		if err != nil {
-			log.Printf("[sniff] 失败 url=%s err=%v need_browser=%v", u, err, errors.Is(err, sniff.ErrNeedsBrowser))
+			Logf("[sniff] 失败 url=%s err=%v need_browser=%v", u, err, errors.Is(err, sniff.ErrNeedsBrowser))
 			writeJSON(w, map[string]any{"ok": false, "msg": err.Error(), "need_browser": errors.Is(err, sniff.ErrNeedsBrowser)})
 			return
 		}
-		log.Printf("[sniff] 成功 url=%s 集数=%d", u, len(eps))
+		Logf("[sniff] 成功 url=%s 集数=%d", u, len(eps))
 		// 抓封面图（学 OnScreen artwork，但抓盗版站详情页图）
 		poster := ""
 		if htmlText, ferr := e.Fetch(u); ferr == nil {
@@ -219,14 +218,14 @@ func New(opts Options) *Instance {
 			PlayURL: u,
 			Title:   title,
 		}
-		log.Printf("[cast] 拿流+投屏 url=%s title=%s", u, title)
+		Logf("[cast] 拿流+投屏 url=%s title=%s", u, title)
 		st, err := src.CastWith(rq.Context())
 		if err != nil {
-			log.Printf("[cast] 失败 url=%s err=%v", u, err)
+			Logf("[cast] 失败 url=%s err=%v", u, err)
 			writeJSON(w, map[string]any{"ok": false, "msg": err.Error()})
 			return
 		}
-		log.Printf("[cast] 成功 url=%s mime=%s ref=%s", st.URL, st.Mime, st.Headers["Referer"])
+		Logf("[cast] 成功 url=%s mime=%s ref=%s", st.URL, st.Mime, st.Headers["Referer"])
 		ref := st.Headers["Referer"]
 		writeJSON(w, map[string]any{"ok": true, "url": st.URL, "mime": st.Mime, "ref": ref})
 	})
@@ -362,9 +361,9 @@ func New(opts Options) *Instance {
 		}
 		q := rq.URL.Query().Get("query")
 		if errq := rq.URL.Query().Get("err"); errq != "" {
-			log.Printf("[search/render] JS 错误! engine=%s err=%s", engine, errq)
+			Logf("[search/render] JS 错误! engine=%s err=%s", engine, errq)
 		}
-		log.Printf("[search/render] POST html=%dB engine=%s url=%s", len(htmlText), engine, u)
+		Logf("[search/render] POST html=%dB engine=%s url=%s", len(htmlText), engine, u)
 		rs := inst.Search.ParseRendered(htmlText, u, engine)
 		inst.searchMu.Lock()
 		inst.searchResult = rs
@@ -471,7 +470,7 @@ func New(opts Options) *Instance {
 				writeJSON(w, map[string]any{"ok": false, "msg": err.Error()})
 				return
 			}
-			log.Printf("[config] 保存配置 engines=%v", cfg["search_engines"])
+			Logf("[config] 保存配置 engines=%v", cfg["search_engines"])
 			writeJSON(w, map[string]any{"ok": true})
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -482,7 +481,7 @@ func New(opts Options) *Instance {
 	mux.HandleFunc("/api/logs", func(w http.ResponseWriter, rq *http.Request) {
 		n := 0
 		fmt.Sscanf(rq.URL.Query().Get("n"), "%d", &n)
-		lines := logBuf.Logs(n)
+		lines := ReadLog(n)
 		if q := strings.TrimSpace(rq.URL.Query().Get("q")); q != "" {
 			var f []string
 			for _, l := range lines {
@@ -565,7 +564,7 @@ func logRequests(next http.Handler) http.Handler {
 		}
 		rec := &statusRecorder{ResponseWriter: w, code: http.StatusOK}
 		next.ServeHTTP(rec, rq)
-		log.Printf("[http] %s %s from %s ua=%q -> %d",
+		Logf("[http] %s %s from %s ua=%q -> %d",
 			rq.Method, rq.URL.RequestURI(), rq.RemoteAddr, rq.UserAgent(), rec.code)
 	})
 }
@@ -697,9 +696,9 @@ func initConfig() {
 	}
 	b, _ := json.MarshalIndent(defaultConfig, "", "  ")
 	if err := os.WriteFile(configPath, b, 0644); err != nil {
-		log.Printf("[config] 写入默认配置失败: %v", err)
+		Logf("[config] 写入默认配置失败: %v", err)
 	} else {
-		log.Printf("[config] 创建默认配置 %s（只开 baidu）", configPath)
+		Logf("[config] 创建默认配置 %s（只开 baidu）", configPath)
 	}
 }
 
