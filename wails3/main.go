@@ -9,6 +9,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -25,6 +26,37 @@ func backendPort() string {
 		return p
 	}
 	return server.Port
+}
+
+// renderPage 用一个后台子 WebView 窗口渲染盗版站详情页（Cloudflare/JS 反爬），
+// 拿 document.documentElement.outerHTML POST 回后端 /api/sniff/render，然后关掉子窗口。
+// 主窗口 UI 不导航、不动（单窗口语义保留：用户看不到渲染过程，只看到结果）。
+func renderPage(app *application.App, targetURL, apiPath string) {
+	port := backendPort()
+	win := app.Window.NewWithOptions(application.WebviewWindowOptions{
+		Title:            "加载中…",
+		Width:            900,
+		Height:           700,
+		BackgroundColour: application.NewRGB(17, 17, 17),
+		URL:              targetURL,
+	})
+	go func() {
+		// 等页面渲染（Cloudflare 挑战/JS 反爬通常要几秒；轮询等 HTML 里有内容）
+		time.Sleep(6 * time.Second)
+		js := fmt.Sprintf(`(function(){
+		  try{
+		    var html = document.documentElement.outerHTML;
+		    var xhr = new XMLHttpRequest();
+		    xhr.open('POST', 'http://127.0.0.1:%s%s?url=' + encodeURIComponent('%s'), true);
+		    xhr.setRequestHeader('Content-Type','text/plain');
+		    xhr.send(html);
+		  }catch(e){}
+		})();`, port, apiPath, targetURL)
+		win.ExecJS(js)
+		// 再等回传完成，关窗
+		time.Sleep(3 * time.Second)
+		win.Close()
+	}()
 }
 
 func main() {
@@ -52,6 +84,15 @@ func main() {
 		Description: "家庭影院投屏中继（B站/盗版站 → 电视，DLNA）",
 	})
 
+	// 桌面 WebView 兜底：need_browser（Cloudflare/JS 反爬）时开后端子 WebView 渲染详情页。
+	// JS 桥：window.hc.sniffRender(url) / window.hc.searchRender(url) → fetch 本地后端触发。
+	bootJS := `
+	window.hc = {
+	  sniffRender: function(url){ fetch('/api/sniff/render-launch?url='+encodeURIComponent(url)); },
+	  searchRender: function(url){ fetch('/api/search/render-launch?url='+encodeURIComponent(url)); },
+	  searchEngine: function(engine, url){ window.__se_engine=engine; fetch('/api/search/render-launch?url='+encodeURIComponent(url)); }
+	};`
+
 	app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:            "MyCast 家庭影院",
 		Width:            1280,
@@ -60,8 +101,13 @@ func main() {
 		MinHeight:        620,
 		BackgroundColour: application.NewRGB(17, 17, 17),
 		URL:              "http://127.0.0.1:" + port + "/ui",
-		JS:               "window.hcEnv='desktop';",
+		JS:               bootJS,
 	})
+
+	// 注册渲染兜底：后端 /api/sniff/render-launch 触发开子窗口。
+	inst.WebviewRender = func(targetURL string) {
+		renderPage(app, targetURL, "/api/sniff/render")
+	}
 
 	if err := app.Run(); err != nil {
 		os.Exit(1)
