@@ -135,6 +135,12 @@ func TestE2EDesktopRenders(t *testing.T) {
 			t.Errorf("GET /ui 缺骨架标记 %q（防黑屏：HTML 主体在）", marker)
 		}
 	}
+	// 1b. 播放器增强：底部控制栏（上一集/下一集/倍速/全屏）+ 自定义进度条
+	for _, marker := range []string{"player-ctrl", "pc-prev", "pc-next", "pc-speed", "toggleFullscreen", "pc-progress", "pc-fill", "paintPlayerProgress"} {
+		if !strings.Contains(html, marker) {
+			t.Errorf("GET /ui 缺播放器增强元素 %q", marker)
+		}
+	}
 
 	// 2. 窗口创建 + 非全黑（等渲染）
 	time.Sleep(6 * time.Second)

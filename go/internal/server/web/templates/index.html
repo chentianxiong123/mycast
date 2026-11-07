@@ -261,7 +261,12 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
 .player-title{flex:1;color:#fff;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .player-close{width:36px;height:36px;border:none;border-radius:50%;background:rgba(255,255,255,.15);color:#fff;font-size:16px}
 /* 播放器底部控制栏：上一集/下一集/倍速/全屏 */
-.player-ctrl{position:absolute;bottom:0;left:0;right:0;display:flex;align-items:center;justify-content:center;gap:10px;padding:12px 14px;background:linear-gradient(transparent,#000 60%);z-index:81}
+.player-ctrl{position:absolute;bottom:0;left:0;right:0;display:flex;flex-direction:column;gap:8px;padding:12px 14px;background:linear-gradient(transparent,#000 60%);z-index:81}
+.pc-progress{position:relative;height:22px;cursor:pointer;touch-action:none;display:flex;align-items:center}
+.pc-fill{height:4px;border-radius:2px;background:linear-gradient(90deg,var(--acc),#ff7a45);position:absolute;left:0;top:50%;transform:translateY(-50%);width:0}
+.pc-progress::before{content:'';position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);height:4px;border-radius:2px;background:rgba(255,255,255,.2)}
+.pc-time{position:absolute;right:0;top:0;font-size:10px;color:rgba(255,255,255,.8);font-variant-numeric:tabular-nums}
+.pc-btns{display:flex;align-items:center;justify-content:center;gap:10px}
 .pc-btn{flex:1;max-width:160px;height:44px;border:none;border-radius:10px;background:rgba(255,255,255,.15);color:#fff;font-size:14px;font-weight:600;cursor:pointer;white-space:nowrap}
 .pc-btn:active{background:rgba(255,255,255,.3)}
 .pc-btn:disabled{opacity:.35;cursor:default}
@@ -460,10 +465,16 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
   </div>
   <!-- 播放器底部控制栏：上一集/下一集/倍速/全屏 -->
   <div class="player-ctrl">
-    <button class="pc-btn" id="pc-prev" onclick="prevEp()" disabled>⏮ 上一集</button>
-    <button class="pc-btn" id="pc-next" onclick="nextEp()" disabled>下一集 ⏭</button>
-    <button class="pc-btn" id="pc-speed" onclick="cycleSpeed()">1x</button>
-    <button class="pc-btn" onclick="toggleFullscreen()">⛶ 全屏</button>
+    <div class="pc-progress" id="pc-progress">
+      <div class="pc-fill" id="pc-fill"></div>
+      <div class="pc-time" id="pc-time">0:00 / 0:00</div>
+    </div>
+    <div class="pc-btns">
+      <button class="pc-btn" id="pc-prev" onclick="prevEp()" disabled>⏮ 上一集</button>
+      <button class="pc-btn" id="pc-next" onclick="nextEp()" disabled>下一集 ⏭</button>
+      <button class="pc-btn" id="pc-speed" onclick="cycleSpeed()">1x</button>
+      <button class="pc-btn" onclick="toggleFullscreen()">⛶ 全屏</button>
+    </div>
   </div>
 </div>
 
@@ -695,6 +706,7 @@ function playLocal(url, mime, title, epsCtx) {
   // 记住集数上下文（上一集/下一集）
   playEps = epsCtx || { eps: [], index: 0 };
   updatePlayerCtl();
+  initPlayerProgress();
   // 销毁旧 hls
   if(hls) { hls.destroy(); hls = null; }
   const isHLS = (mime||'').indexOf('mpegurl')>=0 || (mime||'').indexOf('m3u8')>=0 || /\.m3u8/.test(url);
@@ -757,6 +769,37 @@ function toggleFullscreen() {
   const ov = document.getElementById('player-overlay');
   if(document.fullscreenElement) document.exitFullscreen().catch(()=>{});
   else ov.requestFullscreen().catch(()=>{});
+}
+
+// ── 播放器进度条：timeupdate 更新 + 点击 seek ──
+function initPlayerProgress() {
+  const v = document.getElementById('player-video');
+  if(!v) return;
+  v.addEventListener('timeupdate', paintPlayerProgress);
+  v.addEventListener('loadedmetadata', paintPlayerProgress);
+  v.addEventListener('ended', ()=>{ const n=document.getElementById('pc-next'); if(n && !n.disabled) nextEp(); });
+  const bar = document.getElementById('pc-progress');
+  if(bar) {
+    bar.addEventListener('click', e=>{
+      const r = bar.getBoundingClientRect();
+      const pct = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+      if(v.duration) { v.currentTime = pct * v.duration; paintPlayerProgress(); }
+    });
+  }
+}
+function fmtPlayTime(s) {
+  if(!isFinite(s) || s < 0) s = 0;
+  const m = Math.floor(s/60), sec = Math.floor(s%60);
+  return m + ':' + String(sec).padStart(2,'0');
+}
+function paintPlayerProgress() {
+  const v = document.getElementById('player-video');
+  const fill = document.getElementById('pc-fill');
+  const t = document.getElementById('pc-time');
+  if(!v || !fill) return;
+  const pct = v.duration ? (v.currentTime / v.duration) * 100 : 0;
+  fill.style.width = pct + '%';
+  if(t) t.textContent = fmtPlayTime(v.currentTime) + ' / ' + fmtPlayTime(v.duration||0);
 }
 
 // 播放指定集（带集数上下文，供上一集/下一集）
