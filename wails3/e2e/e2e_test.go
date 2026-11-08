@@ -30,7 +30,7 @@ import (
 )
 
 const (
-	baseURL  = "http://127.0.0.1:8080"
+	baseURL  = "http://127.0.0.1:18080"
 	winTitle = "MyCast 家庭影院"
 )
 
@@ -41,7 +41,7 @@ func runDesktop(t *testing.T, bin string) *exec.Cmd {
 		t.Skipf("二进制 %s 不存在，先编译: go build -o %s .（wails3/ 下）", bin, bin)
 	}
 	cmd := exec.Command(bin)
-	cmd.Env = append(os.Environ(), "HC_PORT=8080")
+	cmd.Env = append(os.Environ(), "HC_PORT=18080")
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {

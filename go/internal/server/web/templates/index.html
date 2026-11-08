@@ -971,40 +971,12 @@ async function searchSites() {
     const r = await fetch('/api/search?q='+encodeURIComponent(q));
     const d = await r.json();
     if(d.ok) { renderSearchRes(box, d.results||[]); toast('搜到 '+(d.results||[]).length+' 条'); return; }
-    // 聚合失败（验证码/空）→ WebView 渲染搜索（注入固化 cookie）
-    if(d.need_browser) { searchViaWebView(q, d.msg||''); return; }
-    box.innerHTML = '<div class="warn">'+(d.msg||'搜索失败')+'</div>';
-  } catch(e) { box.innerHTML = '<div class="warn">网络错误: '+e.message+'</div>'; }
+    // 库直接搜（WebView 渲染）：宿主未注入渲染器才 need_browser（正常宿主不出现）。
+    if(d.need_browser) { box.innerHTML = '<div class="warn">'+escapeHtml(d.msg||'WebView 渲染器未注入')+'</div>'; return; }
+    box.innerHTML = '<div class="warn">'+escapeHtml(d.msg||'搜索失败')+'</div>';
+  } catch(e) { box.innerHTML = '<div class="warn">网络错误: '+escapeHtml(e.message)+'</div>'; }
 }
-
-// 搜索引擎 WebView 兜底：逐个引擎用内置浏览器渲染（注入固化 cookie）
-function searchViaWebView(q, reason) {
-  const box = document.getElementById('search-res');
-  if(!window.hc || !window.hc.searchEngine) { box.innerHTML = '<div class="warn">纯 HTTP 搜索失败（'+reason+'），需 App 内渲染（桌面版不支持）</div>'; return; }
-  box.innerHTML = '<div class="warn">纯 HTTP 失败（'+reason+'），用内置浏览器渲染…</div>';
-  // 优先 360（需登录态，固化后最稳），失败依次 bing/baidu
-  const tries = ['so','bing','baidu'];
-  window.hc.searchEngine(tries[0], 'https://m.so.com/s?q='+encodeURIComponent(q));
-  pollSearchResult(q);
-}
-
-// 轮询 WebView 渲染后的搜索结果
-function pollSearchResult(q) {
-  let tries = 0;
-  const iv = setInterval(async ()=>{
-    tries++;
-    try {
-      const r = await fetch('/api/search/result');
-      const d = await r.json();
-      if(d.ok && d.results && d.results.length) {
-        clearInterval(iv);
-        renderSearchRes(document.getElementById('search-res'), d.results);
-        toast('渲染搜到 '+(d.results||[]).length+' 条');
-      }
-      else if(tries > 40) { clearInterval(iv); document.getElementById('search-res').innerHTML = '<div class="warn">渲染搜索超时</div>'; }
-    } catch(e) { clearInterval(iv); document.getElementById('search-res').innerHTML = '<div class="warn">轮询失败: '+e.message+'</div>'; }
-  }, 1000);
-}
+function escapeHtml(s){ return String(s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function renderSearchRes(box, rs) {
   if(!rs.length) { box.innerHTML = '<div class="warn">无结果</div>'; return; }
   box.innerHTML = '<div class="sres">'+rs.map(r=>
