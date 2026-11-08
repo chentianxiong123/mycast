@@ -34,8 +34,8 @@ func main() {
 	defer inst.Stop()
 
 	// 必须 tcp4（IPv4 明确）：Go 的 "tcp"+"0.0.0.0:port" 实际绑 IPv6 [::]:port（双栈），
-	// 手机 App 里 IPv4 映射未开 → WebView 连 127.0.0.1:8080 失败（白屏）。
-	// tcp4 绑 IPv4 0.0.0.0:8080：桌面局域网电视 + App 内 127.0.0.1 都能连。
+	// 手机 App 里 IPv4 映射未开 → WebView 连 127.0.0.1:18080 失败（白屏）。
+	// tcp4 绑 IPv4 0.0.0.0:18080：桌面局域网电视 + App 内 127.0.0.1 都能连。
 	addr := fmt.Sprintf("0.0.0.0:%s", port)
 	ln, err := net.Listen("tcp4", addr)
 	if err != nil {

@@ -1,8 +1,8 @@
 // MyCast 桌面壳（wails3 v3）：原生窗口，直载后端真实 HTTP（非 asset 桥）。
 //
 //	架构（照搬 mymusic 已验证模式）：
-//	  - 后端 server.New() 监听 tcp4 0.0.0.0:8080（IPv4 明确：局域网电视 + 窗口 127.0.0.1 都能连）
-//	  - wails3 WebviewWindowOptions.URL = http://127.0.0.1:8080/ui 直载真实后端（同源，非 asset 桥）
+//	  - 后端 server.New() 监听 tcp4 0.0.0.0:18080（IPv4 明确：局域网电视 + 窗口 127.0.0.1 都能连）
+//	  - wails3 WebviewWindowOptions.URL = http://127.0.0.1:18080/ui 直载真实后端（同源，非 asset 桥）
 //	  - 不弹系统浏览器（双击即出原生窗口，像原生应用）
 //
 //	平台差异：桌面=本壳（wails3 原生窗口）；安卓=自写壳（android/，纯 aapt2，已在真机跑通）。
@@ -20,7 +20,7 @@ import (
 	"mycast/internal/server"
 )
 
-// backendPort 后端 HTTP 端口（HC_PORT 覆盖）；与 server.Port 默认 8080 一致
+// backendPort 后端 HTTP 端口（HC_PORT 覆盖）；与 server.Port 默认 18080 一致
 func backendPort() string {
 	if p := os.Getenv("HC_PORT"); p != "" {
 		return p
@@ -61,12 +61,12 @@ func renderPage(app *application.App, targetURL, apiPath string) {
 
 func main() {
 	// 后端监听端口（HC_PORT 覆盖）——server.Options.Port 也要传，
-	// 否则 BaseURL 用默认 8080 拼，页面显示的局域网地址与实际端口不一致。
+	// 否则 BaseURL 用默认 18080 拼，页面显示的局域网地址与实际端口不一致。
 	port := backendPort()
 	inst := server.New(server.Options{Port: port})
 	defer inst.Stop()
 
-	// 后端监听 tcp4 0.0.0.0:8080（IPv4 明确，见 cmd/mycast/main.go 同因）
+	// 后端监听 tcp4 0.0.0.0:18080（IPv4 明确，见 cmd/mycast/main.go 同因）
 	go func() {
 		addr := "0.0.0.0:" + port
 		ln, err := net.Listen("tcp4", addr)

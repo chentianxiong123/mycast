@@ -96,7 +96,7 @@ type Progress struct {
 type Server struct {
 	mu       sync.Mutex
 	sessions map[string]*Session
-	baseURL  string // 本机对外地址，如 http://192.168.1.5:8080
+	baseURL  string // 本机对外地址，如 http://192.168.1.5:18080
 	hc       *http.Client
 	ffmpeg   string
 }
