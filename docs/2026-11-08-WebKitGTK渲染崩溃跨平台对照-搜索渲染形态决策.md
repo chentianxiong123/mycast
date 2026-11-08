@@ -38,7 +38,8 @@ Program received signal SIGABRT
 | 平台 | 渲染内核 | 百度 | 360 | 必应 | 崩溃 |
 |---|---|---|---|---|---|
 | **Windows** | WebView2 (Chromium 155) | ✅ | ✅ | ✅ | **0 次** |
-| **Linux** | WebKitGTK 2.54 | ❌ | ❌ | ❌ | 必崩 |
+| **Linux（wails3 壳）** | WebKitGTK 2.54 | ✅ | ✅ | ✅ | **0 次**（用户实测任意点击） |
+| **Linux（renderd 无窗口）** | WebKitGTK 2.54 | ⚠️ | ⚠️ | ⚠️ | **概率崩（复现 1/5）** |
 
 Windows 用同一套 wails3 逻辑交叉编译（`GOOS=windows CGO_ENABLED=0`，纯 Go 无 cgo），
 窗口直接加载三外部搜索页，每 12s 换页 + `Eval(outerHTML.length)`，完整 DONE 零崩溃。
@@ -48,8 +49,8 @@ Windows 用同一套 wails3 逻辑交叉编译（`GOOS=windows CGO_ENABLED=0`，
 | 平台 | 推荐渲染 | 理由 |
 |---|---|---|
 | **Windows** | WebView2 渲染（wails3 壳） | 实测零崩溃，方案可行 |
-| **Linux** | HTTP 直拿（demo-search 已证 6/6 稳） | WebKitGTK 2.54 必崩，无法应用层根治，只能崩溃重启重试兜底 |
-| **Android** | 系统 WebView 渲染 | 早期手搓壳机制已验证（evaluateJavascript 拿 outerHTML） |
+| **Linux** | WebView 渲染（wails3 壳） | **实测零崩溃**（用户任意点击）；弃用 renderd（无窗口+每 URL 新建/销毁→概率崩 1/5） |
+| **Android** | 系统 WebView 渲染 | 实测零崩溃（含 baiduboxapp:// scheme 拦截） |
 
 **跨平台一致性**（用户硬决策）：接口一致（WebView JS 注入 + 只读 outerHTML），
 进程模型平台相关（桌面独立渲染进程 / Android 系统 WebView）。
@@ -63,6 +64,18 @@ Windows 用同一套 wails3 逻辑交叉编译（`GOOS=windows CGO_ENABLED=0`，
   - 标题：WebKitGTK 2.54 crashes (SIGABRT) on loading external pages — use-after-free in WTF::RunLoop::TimerBase::stop()
   - 内容：纯技术（不露项目），含 gdb 栈、复现、与 #276312 区别表、环境。
 
+## 崩溃路径锁定（重大反转）
+
+**之前"Linux WebKitGTK 必崩"是 renderd（purego 直接调 WebKitGTK，无窗口）特有路径的误判**。
+用同样写法（wails3 壳 + 真实窗口）验证 Linux：**百度/360/bing 三页 + 任意点击零崩溃**。
+
+- **崩溃只属 renderd**：`webkit_web_view_new()` 裸建 + 局部隐藏窗口 + 每 URL 新建/销毁
+  （`destroyWebView` 频繁 stop_loading/unref）→ 页面卸载时残留 JS 定时器 use-after-free
+  → SIGABRT（复现 1/5）。
+- **wails3 壳**：真实窗口 attach + 长存单 WebView + wails3 管生命周期 → **零崩溃**。
+- **弃用 renderd**（它当初为绕 wails3 `g_idle_add` 死结而造，但自己引入崩溃）。
+- **唯一要处理的**：百度移动版 `baiduboxapp://` scheme 拦截（Android 必须；Linux/Windows target=_blank 同理）。
+
 ## 已知边界（Windows 实测发现）
 
 1. **必须 `app.Run()`** 窗口才显示（漏了 → MainWindowHandle=0，进程跑但无窗口）。
@@ -72,5 +85,7 @@ Windows 用同一套 wails3 逻辑交叉编译（`GOOS=windows CGO_ENABLED=0`，
 
 ## 下一步（待拍板）
 
-- 搜索链路最终形态：Linux 走 HTTP 直拿（A 方案），Windows/Android 走 WebView 渲染（B 方案）。
+- 搜索链路最终形态：**三平台统一走 wails3 壳 WebView 渲染**（Windows/Android/Linux 实测都零崩溃）。
+- 弃用 renderd（无窗口 + 每 URL 新建/销毁 → 概率崩）。
+- 落地 `baiduboxapp://` scheme 拦截 + target=_blank 拦截到 mycast 壳（Android MainActivity + 桌面壳）。
 - 若坚持单窗口 + 不弹新窗口：需 fork wails3 加 `NewWindowRequested` 回调，或搜索结果点开走本地路由。
