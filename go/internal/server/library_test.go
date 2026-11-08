@@ -40,7 +40,48 @@ func TestLibraryPersist(t *testing.T) {
 	if _, ok := l2.Get("https://c.com/d3.html"); !ok {
 		t.Fatal("持久化应能读回")
 	}
-	if _, err := os.Stat(filepath.Join(dir, "library.json")); err != nil {
-		t.Fatalf("library.json 未落盘: %v", err)
+	if _, err := os.Stat(filepath.Join(dir, "library.db")); err != nil {
+		t.Fatalf("library.db 未落盘: %v", err)
+	}
+}
+
+// TestLibraryProgress 进度回写持久化（跨实例读回，SQLite 落盘）。
+func TestLibraryProgress(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "data")
+	l := NewLibrary(dir)
+	l.Fav("漫长的季节", "https://d.com/d4.html", "", "")
+	l.UpdateProgress("https://d.com/d4.html", 42.5, "00:42:11", "01:40:00")
+
+	// 新实例读回进度
+	l2 := NewLibrary(dir)
+	it, ok := l2.Get("https://d.com/d4.html")
+	if !ok {
+		t.Fatal("读回失败")
+	}
+	if it.Progress != 42.5 {
+		t.Fatalf("进度应 42.5, got %v", it.Progress)
+	}
+	if it.Position != "00:42:11" || it.Duration != "01:40:00" {
+		t.Fatalf("位置/时长应持久化, got %q/%q", it.Position, it.Duration)
+	}
+	// 越界防护
+	l2.UpdateProgress("https://d.com/d4.html", 150, "", "")
+	it2, _ := l2.Get("https://d.com/d4.html")
+	if it2.Progress != 100 {
+		t.Fatalf("进度应钳到 100, got %v", it2.Progress)
+	}
+}
+
+// TestLibraryProgressUpdate 更新进度后 List 里能看到（回写媒体库 UI）。
+func TestLibraryProgressUpdate(t *testing.T) {
+	l := NewLibrary(t.TempDir())
+	l.Fav("狂飙", "https://b.com/d2.html", "", "")
+	l.UpdateProgress("https://b.com/d2.html", 66.0, "00:30:00", "00:45:00")
+	items := l.List()
+	if len(items) != 1 {
+		t.Fatalf("应 1 条")
+	}
+	if items[0].Progress != 66.0 {
+		t.Fatalf("List 进度应 66, got %v", items[0].Progress)
 	}
 }
