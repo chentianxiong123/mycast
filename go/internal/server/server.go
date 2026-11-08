@@ -24,7 +24,7 @@ import (
 	"mycast/internal/mcp"
 	"mycast/internal/media"
 	"mycast/internal/relay"
-	"mycast/internal/search"
+	search "github.com/chentianxiong123/search-service"
 	"mycast/internal/sniff"
 	"mycast/internal/ssdp"
 )
@@ -141,9 +141,9 @@ func New(opts Options) *Instance {
 		Sniff:   sniff.New(sniff.Default()),
 	}
 	// 搜索聚合器：注入持久化 cookie 提供者（最稳：真实登录态 cookie 纯 HTTP，WebView 仅兜底）
-	inst.Search = search.New(search.Default())
+	inst.Search = search.New(nil) // 无状态库：默认三引擎（bing/360/baidu）
 	inst.Cookies = NewCookieStore(dataDir)
-	inst.Search.CookieFn = inst.Cookies.HeaderString
+	// cookie 通过 Options.CookieFn 传入（库无状态，不持 CookieFn 字段）
 	inst.Library = NewLibrary(dataDir)
 
 	mux := http.NewServeMux()
@@ -299,7 +299,7 @@ func New(opts Options) *Instance {
 		}
 		// 搜索引擎：webview 渲染优先（渲染窗口加载引擎页，JS fetch 回传 outerHTML），
 		// 渲染不可用时走 fetch 后备。
-		enabled := search.EnabledEngines() // 配置开关
+		enabled := enabledEngines() // 配置开关（库无状态，server 管）
 		start := time.Now()
 		LogInfo("[search] q=%s engines=%v 开始", q, enabled)
 		if inst.WebviewRender != nil {
@@ -317,7 +317,7 @@ func New(opts Options) *Instance {
 			}
 		}
 		// fetch 后备（webview 渲染不可用）：按配置过滤引擎。
-		rs, err := inst.Search.Search(rq.Context(), q)
+		rs, err := inst.Search.Search(rq.Context(), q, search.Options{Engines: enabled, CookieFn: inst.Cookies.HeaderString})
 		if err != nil {
 			LogWarn("[search] q=%s 失败 err=%v 耗时=%s", q, err, time.Since(start).Round(time.Millisecond))
 			// 只有验证码特征才 need_browser（走 WebView 兑底）；其他错误是真失败。
@@ -391,7 +391,7 @@ func New(opts Options) *Instance {
 			LogError("[search/render] JS 错误! engine=%s err=%s", engine, errq)
 		}
 		Logf("[search/render] POST html=%dB engine=%s url=%s", len(htmlText), engine, u)
-		rs := inst.Search.ParseRendered(htmlText, u, engine)
+		rs := inst.Search.ParseRendered(htmlText, engine)
 		inst.searchMu.Lock()
 		inst.searchResult = rs
 		inst.searchQuery = q
@@ -752,4 +752,18 @@ func saveConfig(m map[string]any) error {
 		return err
 	}
 	return os.WriteFile(configPath, b, 0644)
+}
+
+// enabledEngines 读取配置的 search_engines 开关（nil=全开；替代库的 EnabledEngines，
+// 库无状态不读配置文件，开关由调用方（server）管）。
+func enabledEngines() []string {
+	cfg := getConfig()
+	arr, _ := cfg["search_engines"].([]any)
+	var out []string
+	for _, v := range arr {
+		if s, ok := v.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
 }
