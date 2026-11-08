@@ -1,6 +1,6 @@
 module mycast
 
-go 1.26.0
+go 1.26.5
 
 require (
 	github.com/huin/goupnp v1.3.0
@@ -9,6 +9,7 @@ require (
 )
 
 require (
+	github.com/chentianxiong123/search-service v0.0.0
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/google/jsonschema-go v0.4.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
@@ -24,5 +25,7 @@ require (
 	modernc.org/libc v1.80.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
-	modernc.org/sqlite v1.62.0 // indirect
+	modernc.org/sqlite v1.62.0
 )
+
+replace github.com/chentianxiong123/search-service => /mnt/shared/search-service
