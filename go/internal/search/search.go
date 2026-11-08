@@ -256,16 +256,19 @@ func (a *Aggregator) searchBing(ctx context.Context, query string) ([]Result, er
 		if n.Type != xhtml.ElementNode || n.Data != "li" || !hasClass(n, "b_algo") {
 			return
 		}
-		// h2 > a
+		// h2 > a（严格标题链接，不取 cite/域名）
 		title, href := "", ""
 		walkNodes(n, func(m *xhtml.Node) {
+			// 只在 h2 下的 a（标题），跳过 cite/域名链接
 			if m.Type == xhtml.ElementNode && m.Data == "a" && href == "" {
-				for _, at := range m.Attr {
-					if at.Key == "href" {
-						href = at.Val
+				if m.Parent != nil && m.Parent.Data == "h2" {
+					for _, at := range m.Attr {
+						if at.Key == "href" {
+							href = at.Val
+						}
 					}
+					title = strings.TrimSpace(textOf(m))
 				}
-				title = strings.TrimSpace(textOf(m))
 			}
 		})
 		href = bingRealURL(href)

@@ -73,6 +73,24 @@ body{
 .sr-u{color:var(--dim);font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sr-e{font-size:9px;color:var(--acc);font-weight:700;text-transform:uppercase}
 
+/* ── 搜索结果页（独立页，效仿 searxng 聚合）── */
+.sx-tabs{display:flex;gap:6px;margin-bottom:10px;overflow-x:auto}
+.sx-tab{flex-shrink:0;padding:5px 12px;border-radius:8px;font-size:11px;color:var(--dim);background:var(--card2);border:1px solid var(--line);cursor:pointer;white-space:nowrap}
+.sx-tab.on{background:var(--acc-soft);color:var(--acc);border-color:var(--acc)}
+.sx-item{display:flex;gap:9px;padding:10px 8px;border-bottom:1px solid var(--line)}
+.sx-item:last-child{border-bottom:none}
+.sx-ico{width:20px;height:20px;border-radius:4px;background:var(--card2);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;flex-shrink:0;margin-top:2px}
+.sx-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;cursor:pointer}
+.sx-title{font-size:13px;font-weight:600;color:#6aa3ff;line-height:1.35;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.sx-title:hover{text-decoration:underline}
+.sx-url{font-size:10px;color:var(--ok);word-break:break-all}
+.sx-desc{font-size:11px;color:var(--dim);line-height:1.5;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.sx-meta{display:flex;align-items:center;gap:6px;margin-top:2px}
+.sx-eng{font-size:9px;font-weight:700;text-transform:uppercase;color:var(--acc);background:var(--acc-soft);padding:1px 6px;border-radius:4px}
+.sx-cat{font-size:9px;color:var(--dim)}
+.sr-back{display:flex;align-items:center;gap:8px}
+.sr-back-t{font-size:14px;font-weight:700;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
 /* ── 首页：家庭影院 ── */
 .hero-q{font-size:20px;font-weight:800;margin-bottom:10px}
 .big-inp{height:46px;font-size:15px;border-radius:12px}
@@ -290,9 +308,11 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
     <div class="card">
       <div class="hero-q">想看什么？</div>
       <div class="sniffrow">
-        <input class="inp big-inp" id="search-q" placeholder="剧名 / 关键词，如：繁花 在线观看" onkeydown="if(event.key==='Enter')searchSites()">
+        <input class="inp big-inp" id="search-q" value="繁花" placeholder="剧名 / 关键词，如：繁花 在线观看" onkeydown="if(event.key==='Enter')searchSites()">
         <button class="btn pri big-btn" onclick="searchSites()">搜索</button>
       </div>
+      <!-- 引擎筛选 tab（searxng 聚合效果，默认隐藏）-->
+      <div class="sx-tabs hidden" id="sr-tabs" style="margin-top:10px"></div>
       <div id="search-res" class="sniffeps"><div class="dim">搜剧 → 选网站 → 点集数 → 电视开播</div></div>
     </div>
 
@@ -320,6 +340,7 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
     </div>
   </div>
 
+  <!-- ═══════════ 搜索结果页（独立页，效仿 searxng 聚合）═══ -->
   <!-- ═══════════ 媒体库（移植 OnScreen UI 结构：继续观看行 + 海报墙）═══ -->
   <div class="page" id="page-library">
     <!-- 继续观看行（学 OnScreen ContinueWatching：大卡 + 进度条 + 点击续投屏）-->
@@ -503,6 +524,74 @@ function goPage(p) {
   if(p === 'logs') pollLogs(); // 进日志页刷日志
   if(p === 'search') loadSearchHistory(); // 进搜索页刷搜索记录
 }
+
+// ═══════════ 搜索结果页（独立页，效仿 searxng 聚合）═══════
+// mock 数据：先给用户看格式（标题/URL/摘要/引擎），后续接真搜索
+const ENGINE_META = {
+  baidu:{name:'百度',   icon:'百'},
+  bing: {name:'Bing',   icon:'B'},
+  so:   {name:'360',    icon:'36'},
+  sogou:{name:'搜狗',   icon:'狗'},
+};
+let srCurEngine = 'all'; // 当前引擎 tab 过滤（all=全部聚合）
+
+let srResults = []; // 当前真实搜索结果（/api/search 返回）
+
+// 真搜索：fetch /api/search（四引擎聚合）→ searxng 样式渲染到搜索页内
+async function mockSearch() {
+  const q = document.getElementById('search-q')?.value.trim() || '';
+  if(!q) { toast('输入关键词', false); return; }
+  const box = document.getElementById('search-res');
+  document.getElementById('sr-tabs').classList.remove('hidden');
+  box.innerHTML = '<div class="dim">搜索中…（百度/Bing/360/搜狗）</div>';
+  try {
+    const r = await fetch('/api/search?q='+encodeURIComponent(q));
+    const d = await r.json();
+    if(d.ok && (d.results||[]).length) {
+      srResults = d.results||[];
+      srCurEngine = 'all';
+      renderSearchTabs();
+      renderSearchList();
+      toast('搜到 '+srResults.length+' 条');
+      return;
+    }
+    if(d.need_browser) { box.innerHTML = '<div class="warn">'+escapeHtml(d.msg||'需浏览器渲染')+'</div>'; return; }
+    box.innerHTML = '<div class="warn">'+escapeHtml(d.msg||'搜索失败')+'</div>';
+  } catch(e) { box.innerHTML = '<div class="warn">网络错误: '+escapeHtml(e.message)+'</div>'; }
+}
+
+// 渲染引擎分类 tab（效仿 searxng：从真实结果的引擎动态生成，全部/百度/360/Bing/搜狗）
+function renderSearchTabs() {
+  const tab = document.getElementById('sr-tabs');
+  if(!tab) return;
+  const engines = [...new Set(srResults.map(r=>r.engine))]; // 只显示有结果的引擎
+  let html = '<div class="sx-tab'+(srCurEngine==='all'?' on':'')+'" onclick="setSrEngine(\'all\')">全部</div>';
+  engines.forEach(e=>{ html += '<div class="sx-tab'+(srCurEngine===e?' on':'')+'" onclick="setSrEngine(\''+e+'\')">'+(ENGINE_META[e]?.name||e)+'</div>'; });
+  tab.innerHTML = html;
+}
+function setSrEngine(e) { srCurEngine = e; renderSearchTabs(); renderSearchList(); }
+
+// 渲染结果列表（searxng 聚合样式：favicon + 标题 + URL + 摘要 + 引擎）——渲染到搜索页内 #search-res
+function renderSearchList() {
+  const box = document.getElementById('search-res');
+  if(!box) return;
+  const list = srResults.filter(r => srCurEngine==='all' || r.engine===srCurEngine);
+  if(!list.length) { box.innerHTML = '<div class="dim" style="padding:16px 0;text-align:center">没有结果</div>'; return; }
+  box.innerHTML = '<div class="sres">'+list.map(r => {
+    const em = ENGINE_META[r.engine] || {name:r.engine, icon:(r.engine||'?')[0]};
+    const desc = r.desc || r.snippet || ''; // 真结果可能无摘要
+    return '<div class="sx-item">' +
+      '<div class="sx-ico">'+em.icon+'</div>' +
+      '<div class="sx-main" onclick="pickSite(\''+r.url.replace(/'/g,"\\'")+'\',\''+(r.title||r.url||'').replace(/'/g,"\\'")+'\')">' +
+        '<div class="sx-title">'+(r.title||r.url)+'</div>' +
+        '<div class="sx-url">'+r.url+'</div>' +
+        (desc ? '<div class="sx-desc">'+escapeHtml(desc)+'</div>' : '') +
+        '<div class="sx-meta"><span class="sx-eng">'+em.name+'</span></div>' +
+      '</div>' +
+    '</div>';
+  }).join('')+'</div>';
+}
+function openSearchUrl(u) { window.open(u, '_blank'); }
 
 // ── 账号固化（搜索引擎登录态 cookie 持久化）──
 const SE_ENGINES = [
@@ -965,6 +1054,9 @@ function rerunSearch(q) {
 
 // ── 资源搜索（bing/360/百度 聚合）──
 async function searchSites() {
+  // mock 阶段：searxng 聚合样式渲染到搜索页内（接真搜索后这里改回 fetch /api/search）
+  mockSearch();
+  return;
   const q = document.getElementById('search-q').value.trim();
   if(!q) { toast('请输入关键词', false); return; }
   const box = document.getElementById('search-res');
@@ -1311,6 +1403,10 @@ document.addEventListener('DOMContentLoaded', () => {
 setInterval(()=>{ refresh(); pollPlay(); }, 1000);
 setInterval(pollLogs, 2500);
 refresh(); pollPlay(); pollLogs(); loadSearchHistory(); loadLibrary();
+// demo 验证：载入即真搜（看 searxng 渲染真结果），确认后删
+setTimeout(()=>{ mockSearch(); }, 400);
+// demo 阶段：载入即展示独立搜索结果页（mock 数据），看 searxng 聚合格式
+
 </script>
 </body>
 </html>
