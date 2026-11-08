@@ -35,8 +35,8 @@ var tplFS embed.FS
 //go:embed web/static/hls.min.js
 var hlsJS []byte
 
-// Port 默认端口
-const Port = "8080"
+// Port 默认端口（小众端口：避开 8080/8000/3000/5000 常见位，防局域网冲突）
+const Port = "18080"
 
 // Instance 一次完整装配（服务端 + 后台任务），可 Stop
 type Instance struct {
