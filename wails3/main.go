@@ -111,6 +111,10 @@ func main() {
 		renderPage(app, targetURL, "/api/sniff/render")
 	}
 
+	// 库直接搜（WebView 渲染）：注入无 UI WebView 渲染函数（JS 注入拿 outerHTML，阻塞返回）。
+	// 跨平台：桌面 WebKitGTK 无 UI WebView；库 Search 调它渲染引擎页 → 聚合结果。
+	inst.WebviewSearchRender = webviewRenderHTML
+
 	if err := app.Run(); err != nil {
 		os.Exit(1)
 	}
