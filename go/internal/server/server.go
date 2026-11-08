@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -480,6 +481,21 @@ func New(opts Options) *Instance {
 		source := rq.URL.Query().Get("source")
 		inst.Library.Fav(title, u, poster, source)
 		writeJSON(w, map[string]any{"ok": true, "fav": true})
+	})
+	// 播放进度/元数据回写媒体库（SQLite 持久化，跨设备不丢）
+	mux.HandleFunc("/api/library/progress", func(w http.ResponseWriter, rq *http.Request) {
+		u := rq.URL.Query().Get("url")
+		if u == "" {
+			writeJSON(w, map[string]any{"ok": false, "msg": "缺少 url"})
+			return
+		}
+		pct := 0.0
+		if v := rq.URL.Query().Get("progress"); v != "" {
+			pct, _ = strconv.ParseFloat(v, 64)
+		}
+		inst.Library.UpdateProgress(u, pct,
+			rq.URL.Query().Get("position"), rq.URL.Query().Get("duration"))
+		writeJSON(w, map[string]any{"ok": true})
 	})
 	// 搜索配置（引擎开关）
 	mux.HandleFunc("/api/config", func(w http.ResponseWriter, rq *http.Request) {
