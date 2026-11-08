@@ -24,7 +24,7 @@ import (
 	"mycast/internal/mcp"
 	"mycast/internal/media"
 	"mycast/internal/relay"
-	search "github.com/chentianxiong123/search-service"
+	search "github.com/chentianxiong123/go-proxy-search"
 	"mycast/internal/sniff"
 	"mycast/internal/ssdp"
 )
