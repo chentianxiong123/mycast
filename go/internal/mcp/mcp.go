@@ -18,13 +18,13 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	search "github.com/chentianxiong123/go-proxy-search"
+	"mycast/internal/search"
 	"mycast/internal/sniff"
 )
 
 // Searcher 搜索能力（*search.Aggregator 满足）。
 type Searcher interface {
-	Search(ctx context.Context, query string, opts search.Options) ([]search.Result, error)
+	Search(ctx context.Context, query string) ([]search.Result, error)
 }
 
 // Sniffer 集数提取 + 拿流（*sniff.Extractor 满足）。
@@ -84,7 +84,7 @@ func (s *Server) handleSearch(ctx context.Context, req mcp.CallToolRequest) (*mc
 	if qs == "" {
 		return mcp.NewToolResultError("缺少关键词 query"), nil
 	}
-	rs, err := s.Search.Search(ctx, qs, search.Options{})
+	rs, err := s.Search.Search(ctx, qs)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}

@@ -60,6 +60,7 @@ func renderPage(app *application.App, targetURL, apiPath string) {
 }
 
 func main() {
+
 	// 后端监听端口（HC_PORT 覆盖）——server.Options.Port 也要传，
 	// 否则 BaseURL 用默认 18080 拼，页面显示的局域网地址与实际端口不一致。
 	port := backendPort()
@@ -110,10 +111,6 @@ func main() {
 	inst.WebviewRender = func(targetURL string) {
 		renderPage(app, targetURL, "/api/sniff/render")
 	}
-
-	// 库直接搜（WebView 渲染）：注入无 UI WebView 渲染函数（JS 注入拿 outerHTML，阻塞返回）。
-	// 跨平台：桌面 WebKitGTK 无 UI WebView；库 Search 调它渲染引擎页 → 聚合结果。
-	inst.WebviewSearchRender = webviewRenderHTML
 
 	if err := app.Run(); err != nil {
 		os.Exit(1)

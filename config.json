@@ -1,7 +1,3 @@
 {
-  "search_engines": [
-    "baidu",
-    "bing",
-    "so"
-  ]
+  "search_engines": ["baidu", "bing", "so", "sogou"]
 }

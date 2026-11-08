@@ -24,7 +24,7 @@ import (
 	"mycast/internal/mcp"
 	"mycast/internal/media"
 	"mycast/internal/relay"
-	search "github.com/chentianxiong123/go-proxy-search"
+	"mycast/internal/search"
 	"mycast/internal/sniff"
 	"mycast/internal/ssdp"
 )
@@ -54,10 +54,10 @@ type Instance struct {
 	// WebviewRender 宿主注入（sniff 兜底：渲染盗版站详情页，回传 outerHTML）。
 	WebviewRender func(url string)
 
-	// WebviewSearchRender 宿主注入（无 UI WebView 渲染引擎页，JS 注入拿 outerHTML，
-	// 阻塞返回 HTML）。库 Search 直接搜：渲染引擎页 → 解析 → 聚合结果。
-	// 跨平台：Android 系统 WebView.evaluateJavascript / 桌面 WebKitGTK webview_eval。
-	WebviewSearchRender search.RenderFunc
+	// 搜索 WebView 兜底（搜索引擎 JS 渲染/验证码时，WebView 渲染结果页再解析）
+	searchMu     sync.Mutex
+	searchResult []search.Result
+	searchQuery  string
 
 	// 最近在看（历史记录，最多 5 条）
 	recentMu sync.Mutex
@@ -141,8 +141,9 @@ func New(opts Options) *Instance {
 		Sniff:   sniff.New(sniff.Default()),
 	}
 	// 搜索聚合器：注入持久化 cookie 提供者（最稳：真实登录态 cookie 纯 HTTP，WebView 仅兜底）
-	inst.Search = search.New(nil) // 无状态库：默认三引擎（bing/360/baidu）
+	inst.Search = search.New(search.Default()) // 纯 HTTP 四引擎（bing/360/baidu/sogou），不依赖库
 	inst.Cookies = NewCookieStore(dataDir)
+	inst.Search.CookieFn = inst.Cookies.HeaderString
 	// cookie 通过 Options.CookieFn 传入（库无状态，不持 CookieFn 字段）
 	inst.Library = NewLibrary(dataDir)
 
@@ -291,31 +292,112 @@ func New(opts Options) *Instance {
 	})
 
 	// 搜索盗版站（bing/360/百度 聚合，接 /api/sniff 提取集数）
+	mux.HandleFunc("/api/search/render", func(w http.ResponseWriter, rq *http.Request) {
+		// CORS：搜索引擎页（so.com/baidu/bing 域）的 JS fetch 跨域回传 outerHTML 到本机后端。
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if rq.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if rq.Method != http.MethodPost {
+			writeJSON(w, map[string]any{"ok": false, "msg": "需要 POST"})
+			return
+		}
+		// HTML 来源二选一：body 文本（JS fetch 直传 outerHTML）或 form（Android Java POST）。
+		htmlText := ""
+		engine := rq.URL.Query().Get("engine")
+		u := rq.URL.Query().Get("url")
+		if strings.Contains(rq.Header.Get("Content-Type"), "text/plain") {
+			b, _ := io.ReadAll(rq.Body)
+			htmlText = string(b)
+		} else {
+			rq.ParseForm()
+			htmlText = rq.PostFormValue("html")
+			if u == "" {
+				u = rq.PostFormValue("url")
+			}
+		}
+		if htmlText == "" {
+			writeJSON(w, map[string]any{"ok": false, "msg": "缺少 html"})
+			return
+		}
+		// 用 search 的解析逻辑解析渲染后的 HTML（复用三引擎各自的解析器）。
+		if engine == "" && u != "" {
+			if strings.Contains(u, "so.com") {
+				engine = "so"
+			} else if strings.Contains(u, "baidu") {
+				engine = "baidu"
+			} else if strings.Contains(u, "bing") {
+				engine = "bing"
+			} else if strings.Contains(u, "sogou") {
+				engine = "sogou"
+			}
+		}
+		q := rq.URL.Query().Get("query")
+		LogInfo("[search/render] POST html=%dB engine=%s url=%s", len(htmlText), engine, u)
+		rs := inst.Search.ParseRendered(htmlText, u, engine)
+		inst.searchMu.Lock()
+		inst.searchResult = rs
+		inst.searchQuery = q
+		inst.searchMu.Unlock()
+		writeJSON(w, map[string]any{"ok": true, "count": len(rs), "engine": engine})
+	})
+
 	mux.HandleFunc("/api/search", func(w http.ResponseWriter, rq *http.Request) {
 		q := strings.TrimSpace(rq.URL.Query().Get("q"))
 		if q == "" {
 			writeJSON(w, map[string]any{"ok": false, "msg": "缺少关键词"})
 			return
 		}
-		// 库直接搜（WebView 渲染）：Search 调宿主注入的 WebviewSearchRender 渲染引擎页，
-		// 解析后聚合去重/过滤/限N，返回聚合结果（对标 searxng，一个请求出结果）。
-		enabled := enabledEngines()
+		// 搜索引擎：webview 渲染优先（渲染窗口加载引擎页，JS fetch 回传 outerHTML），
+		// 渲染不可用时走 fetch 后备（纯 HTTP，转变前模式）。
+		enabled := search.EnabledEngines() // 配置开关
 		start := time.Now()
 		LogInfo("[search] q=%s engines=%v 开始", q, enabled)
-		rs, err := inst.Search.Search(rq.Context(), q, search.Options{
-			Engines: enabled,
-			Renderer: inst.WebviewSearchRender, // 宿主注入无 UI WebView 渲染（JS 注入拿 outerHTML）
-			CookieFn: inst.Cookies.HeaderString,
-			MaxResults: 20,
-		})
+		if inst.WebviewRender != nil {
+			inst.searchMu.Lock()
+			inst.searchResult = nil
+			inst.searchMu.Unlock()
+			for _, eng := range search.BrowserEngines(q, enabled) {
+				inst.WebviewRender(eng.URL)
+				if rs := inst.waitSearchResult(20 * time.Second); len(rs) > 0 {
+					inst.recordSearch(q)
+					LogInfo("[search] q=%s via=webview engine=%s 结果=%d 耗时=%s", q, eng.Name, len(rs), time.Since(start).Round(time.Millisecond))
+					writeJSON(w, map[string]any{"ok": true, "query": q, "results": rs, "via": "webview", "engine": eng.Name})
+					return
+				}
+			}
+		}
+		// fetch 后备（webview 渲染不可用）：按配置过滤引擎。
+		rs, err := inst.Search.Search(rq.Context(), q)
 		if err != nil {
-			needBrowser := errors.Is(err, search.ErrCaptcha) || errors.Is(err, search.ErrNoRenderer)
-			LogWarn("[search] q=%s 失败 err=%v need_browser=%v 耗时=%s", q, err, needBrowser, time.Since(start).Round(time.Millisecond))
+			LogWarn("[search] q=%s 失败 err=%v 耗时=%s", q, err, time.Since(start).Round(time.Millisecond))
+			needBrowser := errors.Is(err, search.ErrCaptcha)
 			writeJSON(w, map[string]any{"ok": false, "msg": err.Error(), "need_browser": needBrowser, "query": q})
 			return
 		}
+		// 按启用引擎过滤（config 控制所有路径）
+		if enabled != nil {
+			en := map[string]bool{}
+			for _, e := range enabled {
+				en[e] = true
+			}
+			var f []search.Result
+			for _, r := range rs {
+				if en[r.Engine] {
+					f = append(f, r)
+				}
+			}
+			rs = f
+		}
 		inst.recordSearch(q)
-		LogInfo("[search] q=%s 结果=%d 耗时=%s", q, len(rs), time.Since(start).Round(time.Millisecond))
+		if len(rs) == 0 {
+			LogWarn("[search] q=%s 结果=0（引擎有结果但全被过滤/触发验证码）", q)
+		} else {
+			LogInfo("[search] q=%s via=fetch 结果=%d 耗时=%s", q, len(rs), time.Since(start).Round(time.Millisecond))
+		}
 		writeJSON(w, map[string]any{"ok": true, "query": q, "results": rs})
 	})
 
@@ -562,6 +644,24 @@ func tvList() []*ssdp.Device {
 		tvMu.Unlock()
 	}()
 	return cached // 首次可能 nil，立即返回
+}
+
+// waitSearchResult 轮询等 webview 渲染回传的搜索（JS fetch POST /api/search/render → ParseRendered 存 searchResult）。
+func (s *Instance) waitSearchResult(timeout time.Duration) []search.Result {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		s.searchMu.Lock()
+		rs := s.searchResult
+		if rs != nil {
+			s.searchResult = nil
+			s.searchQuery = ""
+			s.searchMu.Unlock()
+			return rs
+		}
+		s.searchMu.Unlock()
+		time.Sleep(400 * time.Millisecond)
+	}
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
