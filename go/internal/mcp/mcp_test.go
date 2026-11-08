@@ -10,7 +10,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 
-	search "github.com/chentianxiong123/search-service"
+	search "github.com/chentianxiong123/go-proxy-search"
 	"mycast/internal/sniff"
 )
 
