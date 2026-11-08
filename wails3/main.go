@@ -60,11 +60,13 @@ func renderPage(app *application.App, targetURL, apiPath string) {
 }
 
 func main() {
-	inst := server.New(server.Options{})
+	// 后端监听端口（HC_PORT 覆盖）——server.Options.Port 也要传，
+	// 否则 BaseURL 用默认 8080 拼，页面显示的局域网地址与实际端口不一致。
+	port := backendPort()
+	inst := server.New(server.Options{Port: port})
 	defer inst.Stop()
 
 	// 后端监听 tcp4 0.0.0.0:8080（IPv4 明确，见 cmd/mycast/main.go 同因）
-	port := backendPort()
 	go func() {
 		addr := "0.0.0.0:" + port
 		ln, err := net.Listen("tcp4", addr)
