@@ -10,14 +10,14 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 
-	search "github.com/chentianxiong123/go-proxy-search"
+	"mycast/internal/search"
 	"mycast/internal/sniff"
 )
 
 // fakeSearch 模拟搜索（不发网络）。
 type fakeSearch struct{}
 
-func (fakeSearch) Search(_ context.Context, q string, _ search.Options) ([]search.Result, error) {
+func (fakeSearch) Search(_ context.Context, q string) ([]search.Result, error) {
 	return []search.Result{
 		{Engine: "bing", Title: "站A", URL: "https://a.com/detail/1.html"},
 		{Engine: "so", Title: "站B", URL: "https://b.com/vod/2.html"},

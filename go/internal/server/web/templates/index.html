@@ -417,6 +417,7 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
         <label class="dim" style="display:flex;gap:4px;align-items:center;font-size:12px"><input type="checkbox" id="eng-so"> 360</label>
         <label class="dim" style="display:flex;gap:4px;align-items:center;font-size:12px"><input type="checkbox" id="eng-baidu"> 百度</label>
         <label class="dim" style="display:flex;gap:4px;align-items:center;font-size:12px"><input type="checkbox" id="eng-bing"> Bing</label>
+        <label class="dim" style="display:flex;gap:4px;align-items:center;font-size:12px"><input type="checkbox" id="eng-sogou"> 搜狗</label>
       </div>
       <button class="btn" onclick="saveEngines()" style="font-size:11px;padding:5px 12px">保存</button>
       <span id="eng-save-msg" class="dim" style="font-size:11px;margin-left:8px"></span>
@@ -508,6 +509,7 @@ const SE_ENGINES = [
   { engine: 'so',    name: '360搜索', url: 'https://www.so.com/' },
   { engine: 'baidu', name: '百度',    url: 'https://www.baidu.com/' },
   { engine: 'bing',  name: 'Bing',    url: 'https://www.bing.com/' },
+  { engine: 'sogou', name: '搜狗',    url: 'https://www.sogou.com/' },
 ];
 // 各引擎登录页（打开后用户登录，登录成功自动收集 cookie）
 const SE_LOGIN = {
@@ -1276,14 +1278,14 @@ async function loadEngines() {
     const r = await fetch('/api/config');
     const d = await r.json();
     const engines = d.config?.search_engines || [];
-    ['so','baidu','bing'].forEach(e => {
+    ['so','baidu','bing','sogou'].forEach(e => {
       const cb = document.getElementById('eng-'+e);
       if(cb) cb.checked = engines.includes(e);
     });
   } catch(e){}
 }
 function saveEngines() {
-  const engines = ['so','baidu','bing'].filter(e => document.getElementById('eng-'+e)?.checked);
+  const engines = ['so','baidu','bing','sogou'].filter(e => document.getElementById('eng-'+e)?.checked);
   if(!engines.length) { toast('至少开一个引擎', false); return; }
   fetch('/api/config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({search_engines: engines})})
     .then(r=>r.json())

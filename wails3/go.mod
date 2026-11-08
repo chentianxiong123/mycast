@@ -8,7 +8,6 @@ require (
 )
 
 require (
-	github.com/chentianxiong123/go-proxy-search v0.0.0 // indirect
 	github.com/coder/websocket v1.8.14 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/ebitengine/purego v0.11.1 // indirect
@@ -37,4 +36,3 @@ require (
 
 replace mycast => ../go
 
-replace github.com/chentianxiong123/go-proxy-search => /mnt/shared/go-proxy-search
