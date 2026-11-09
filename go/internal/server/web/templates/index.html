@@ -309,6 +309,12 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
       <div class="hero-q">想看什么？</div>
       <div class="sniffrow">
         <input class="inp big-inp" id="search-q" value="繁花" placeholder="剧名 / 关键词，如：繁花 在线观看" onkeydown="if(event.key==='Enter')searchSites()">
+        <select class="inp" id="search-engine" style="width:auto;max-width:100px;flex:0 0 auto" title="搜索引擎">
+          <option value="baidu">百度</option>
+          <option value="bing">Bing</option>
+          <option value="so">360</option>
+          <option value="sogou">搜狗</option>
+        </select>
         <button class="btn pri big-btn" onclick="searchSites()">搜索</button>
       </div>
       <!-- 引擎筛选 tab（searxng 聚合效果，默认隐藏）-->
@@ -537,18 +543,19 @@ let srCurEngine = 'all'; // 当前引擎 tab 过滤（all=全部聚合）
 
 let srResults = []; // 当前真实搜索结果（/api/search 返回）
 
-// 真搜索：fetch /api/search（四引擎聚合）→ searxng 样式渲染到搜索页内
+// 真搜索（单引擎 webview 渲染）：读下拉选引擎 → /api/search?engine=xxx → 轮询 /api/search/result
 async function mockSearch() {
   const q = document.getElementById('search-q')?.value.trim() || '';
   if(!q) { toast('输入关键词', false); return; }
   const box = document.getElementById('search-res');
+  const eng = document.getElementById('search-engine')?.value || 'baidu';
   document.getElementById('sr-tabs').classList.remove('hidden');
-  box.innerHTML = '<div class="dim">WebView 渲染中…（百度/Bing/360/搜狗，无感）</div>';
-  // webview 渲染（Hidden 子窗口）：/api/search 返回 rendering → 轮询 /api/search/result
+  const em = ENGINE_META[eng] || {name:eng};
+  box.innerHTML = '<div class="dim">'+em.name+' 渲染中…（单引擎 WebView，无感）</div>';
   try {
-    const r = await fetch('/api/search?q='+encodeURIComponent(q));
+    const r = await fetch('/api/search?q='+encodeURIComponent(q)+'&engine='+encodeURIComponent(eng));
     const d = await r.json();
-    if(d.ok && d.rendering) { pollSearchResult(box, 30); return; } // 轮询等 webview 回传
+    if(d.ok && d.rendering) { pollSearchResult(box, 25); return; } // 轮询等 webview 回传
     if(d.ok && (d.results||[]).length) { showSearchResults(d.results, box); return; }
     if(d.need_browser) { box.innerHTML = '<div class="warn">'+escapeHtml(d.msg||'需浏览器渲染')+'</div>'; return; }
     box.innerHTML = '<div class="warn">'+escapeHtml(d.msg||'搜索失败')+'</div>';

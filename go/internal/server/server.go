@@ -61,6 +61,7 @@ type Instance struct {
 	searchMu     sync.Mutex
 	searchResult []search.Result
 	searchQuery  string
+	searchEngine string
 
 	// 最近在看（历史记录，最多 5 条）
 	recentMu   sync.Mutex
@@ -337,8 +338,9 @@ func New(opts Options) *Instance {
 		}
 		inst.searchMu.Lock()
 		if len(rs) > 0 {
-			inst.searchResult = rs // 首个出结果引擎的覆盖
+			inst.searchResult = rs // 单引擎回传结果
 			inst.searchQuery = rq.URL.Query().Get("query")
+			inst.searchEngine = engine
 		}
 		inst.searchMu.Unlock()
 		LogInfo("[search/render] webview 回传 engine=%s 结果=%d", engine, len(rs))
@@ -351,13 +353,14 @@ func New(opts Options) *Instance {
 		rs := inst.searchResult
 		inst.searchResult = nil
 		q := inst.searchQuery
+		eng := inst.searchEngine
 		inst.searchMu.Unlock()
 		if len(rs) == 0 {
-			writeJSON(w, map[string]any{"ok": false, "rendering": true, "query": q})
+			writeJSON(w, map[string]any{"ok": false, "rendering": true, "query": q, "engine": eng})
 			return
 		}
 		inst.recordSearch(q)
-		writeJSON(w, map[string]any{"ok": true, "query": q, "results": rs, "via": "webview"})
+		writeJSON(w, map[string]any{"ok": true, "query": q, "results": rs, "via": "webview", "engine": eng})
 	})
 
 	mux.HandleFunc("/api/search", func(w http.ResponseWriter, rq *http.Request) {
@@ -366,22 +369,44 @@ func New(opts Options) *Instance {
 			writeJSON(w, map[string]any{"ok": false, "msg": "缺少关键词"})
 			return
 		}
-		// 搜索引擎：WebView 渲染优先（Hidden 子窗口渲染引擎页，JS 抓结构化 → 导航回传）——
-		// 用户硬决策：必须走 webview。异步：先返回 rendering，前端轮询 /api/search/result。
-		enabled := search.EnabledEngines() // 配置开关
+		// 搜索引擎：WebView 渲染（单引擎，用户选）——Hidden 子窗口渲染引擎页，JS 抓结构化 → 导航回传。
+		// 用户硬决策：必须走 webview；单引擎可选（engine 参数），不聚合（砍并发）。
+		enabled := search.EnabledEngines()      // 配置开关
+		engName := rq.URL.Query().Get("engine") // 用户选的引擎（单引擎）
+		if engName == "" {
+			engName = "baidu" // 默认
+		}
 		start := time.Now()
-		LogInfo("[search] q=%s engines=%v 开始（webview 渲染）", q, enabled)
+		LogInfo("[search] q=%s engine=%s 开始（webview 单引擎渲染）", q, engName)
 		if inst.SearchWebviewRender != nil {
+			// 找该引擎的 URL（用 q 构造）
+			engs := search.BrowserEngines(q, enabled)
+			var target *search.BrowserEngine
+			for i := range engs {
+				if engs[i].Name == engName {
+					target = &engs[i]
+					break
+				}
+			}
+			if target == nil {
+				// 引擎名无效/未启用 → 用第一个启用的
+				if len(engs) > 0 {
+					target = &engs[0]
+					engName = engs[0].Name
+				}
+			}
+			if target == nil {
+				writeJSON(w, map[string]any{"ok": false, "msg": "无可用引擎（配置开关全关？）", "query": q})
+				return
+			}
 			inst.searchMu.Lock()
 			inst.searchResult = nil
 			inst.searchQuery = q
+			inst.searchEngine = engName
 			inst.searchMu.Unlock()
-			// 依次触发各引擎渲染（首个出结果够用）。
-			for _, eng := range search.BrowserEngines(q, enabled) {
-				LogInfo("[search] 触发 webview 渲染 engine=%s url=%s", eng.Name, eng.URL)
-				go inst.SearchWebviewRender(eng.URL)
-			}
-			writeJSON(w, map[string]any{"ok": true, "query": q, "via": "webview", "rendering": true, "msg": "渲染中…"})
+			LogInfo("[search] 触发 webview 渲染 engine=%s url=%s", target.Name, target.URL)
+			go inst.SearchWebviewRender(target.URL) // 单引擎，1 个窗口
+			writeJSON(w, map[string]any{"ok": true, "query": q, "via": "webview", "rendering": true, "msg": "渲染中…", "engine": engName})
 			return
 		}
 		// 无 webview 渲染器（Android/非桌面壳）：HTTP 四引擎后备。
