@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -57,6 +58,65 @@ func renderPage(app *application.App, targetURL, apiPath string) {
 		time.Sleep(3 * time.Second)
 		win.Close()
 	}()
+}
+
+// searchRenderPage 用 Hidden 子 WebView 窗口渲染搜索引擎页（用户无感），
+// 页面 onload 后 JS 抓结构化结果（标题+URL）→ 导航回传 /api/search/render?engine=x&data=JSON。
+// 绕开：Go→窗口死结（JS 自回传）+ mixed content（导航非 XHR）+ bindings（无 Go 桥）。
+// 子窗口 Hidden:true（wv3hide 验证：能渲染 + 抓 + 回传，零崩溃）。
+func searchRenderPage(app *application.App, targetURL string) {
+	port := backendPort()
+	engine := ""
+	if strings.Contains(targetURL, "so.com") {
+		engine = "so"
+	} else if strings.Contains(targetURL, "baidu") {
+		engine = "baidu"
+	} else if strings.Contains(targetURL, "bing") {
+		engine = "bing"
+	} else if strings.Contains(targetURL, "sogou") {
+		engine = "sogou"
+	}
+	// JS：轮询等结果 DOM（最多 15s）→ 抓前 15 条（标题+URL）→ 导航回传（绕开 mixed content）
+	js := fmt.Sprintf(`(function(){
+	  var waited=0;
+	  function hasRes(){
+	    var sels=['h3 a','h3','.result a','[class*="title"] a','.vrwrap a','li a'];
+	    for(var si=0;si<sels.length;si++){ if(document.querySelectorAll(sels[si]).length>0) return true; }
+	    return false;
+	  }
+	  function grab(){
+	    try{
+	      var items=[]; var seen={};
+	      var sels=['h3 a','h3','.result a','[class*="title"] a','.vrwrap a','li a','a'];
+	      for(var si=0; si<sels.length && items.length<15; si++){
+	        var nodes=document.querySelectorAll(sels[si]);
+	        for(var i=0;i<nodes.length && items.length<15;i++){
+	          var a=nodes[i]; var href=(a.href||'').trim(); var t=(a.textContent||'').trim();
+	          if(href.indexOf('http')===0 && t.length>4 && !seen[href]){ seen[href]=1; items.push({title:t,url:href}); }
+	        }
+	      }
+	      location.href='http://127.0.0.1:%s/api/search/render?engine=%s&data='+encodeURIComponent(JSON.stringify(items));
+	    }catch(e){
+	      location.href='http://127.0.0.1:%s/api/search/render?engine=%s&data='+encodeURIComponent(JSON.stringify([]));
+	    }
+	  }
+	  function waitAndGrab(){
+	    if(document.readyState==='complete' && hasRes()){ grab(); return; }
+	    if(waited>=15000){ grab(); return; } // 超时也抓（可能拿到部分/空）
+	    waited+=1000; setTimeout(waitAndGrab, 1000);
+	  }
+	  if(document.readyState==='complete') setTimeout(waitAndGrab, 1000);
+	  else window.addEventListener('load', function(){ setTimeout(waitAndGrab, 1000); });
+	})();`, port, engine, port, engine)
+	app.Window.NewWithOptions(application.WebviewWindowOptions{
+		Title:            "search-render",
+		Width:            1,
+		Height:           1,
+		BackgroundColour: application.NewRGB(17, 17, 17),
+		URL:              targetURL,
+		JS:               js,
+		Hidden:           true, // 用户无感
+	})
 }
 
 func main() {
@@ -111,6 +171,12 @@ func main() {
 	inst.WebviewRender = func(targetURL string) {
 		renderPage(app, targetURL, "/api/sniff/render")
 	}
+	// 搜索渲染：Hidden 子 WebView 窗口渲染引擎页 + JS 抓结构化 + 导航回传（用户无感）。
+	inst.SearchWebviewRender = func(targetURL string) {
+		log.Printf("[main] SearchWebviewRender 触发: %s", targetURL)
+		searchRenderPage(app, targetURL)
+	}
+	log.Printf("[main] SearchWebviewRender 已注入 (wails3 壳)")
 
 	if err := app.Run(); err != nil {
 		os.Exit(1)

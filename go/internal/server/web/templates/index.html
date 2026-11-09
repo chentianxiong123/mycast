@@ -543,21 +543,35 @@ async function mockSearch() {
   if(!q) { toast('输入关键词', false); return; }
   const box = document.getElementById('search-res');
   document.getElementById('sr-tabs').classList.remove('hidden');
-  box.innerHTML = '<div class="dim">搜索中…（百度/Bing/360/搜狗）</div>';
+  box.innerHTML = '<div class="dim">WebView 渲染中…（百度/Bing/360/搜狗，无感）</div>';
+  // webview 渲染（Hidden 子窗口）：/api/search 返回 rendering → 轮询 /api/search/result
   try {
     const r = await fetch('/api/search?q='+encodeURIComponent(q));
     const d = await r.json();
-    if(d.ok && (d.results||[]).length) {
-      srResults = d.results||[];
-      srCurEngine = 'all';
-      renderSearchTabs();
-      renderSearchList();
-      toast('搜到 '+srResults.length+' 条');
-      return;
-    }
+    if(d.ok && d.rendering) { pollSearchResult(box, 30); return; } // 轮询等 webview 回传
+    if(d.ok && (d.results||[]).length) { showSearchResults(d.results, box); return; }
     if(d.need_browser) { box.innerHTML = '<div class="warn">'+escapeHtml(d.msg||'需浏览器渲染')+'</div>'; return; }
     box.innerHTML = '<div class="warn">'+escapeHtml(d.msg||'搜索失败')+'</div>';
   } catch(e) { box.innerHTML = '<div class="warn">网络错误: '+escapeHtml(e.message)+'</div>'; }
+}
+
+// 轮询 webview 渲染结果（/api/search/result，最多 tries 次）
+function pollSearchResult(box, tries) {
+  if(tries <= 0) { box.innerHTML = '<div class="warn">渲染超时，无结果</div>'; return; }
+  fetch('/api/search/result').then(r=>r.json()).then(d=>{
+    if(d.ok && (d.results||[]).length) { showSearchResults(d.results, box); return; }
+    box.innerHTML = '<div class="dim">渲染中…（'+tries+'）</div>';
+    setTimeout(()=>pollSearchResult(box, tries-1), 700);
+  }).catch(()=>setTimeout(()=>pollSearchResult(box, tries-1), 700));
+}
+
+// 显示搜索结果（searxng 聚合 + 引擎 tab）
+function showSearchResults(results, box) {
+  srResults = results||[];
+  srCurEngine = 'all';
+  renderSearchTabs();
+  renderSearchList();
+  toast('搜到 '+srResults.length+' 条');
 }
 
 // 渲染引擎分类 tab（效仿 searxng：从真实结果的引擎动态生成，全部/百度/360/Bing/搜狗）
