@@ -51,8 +51,15 @@ type Instance struct {
 	sniffResult []sniff.Episode
 	sniffURL    string
 
+	// 纯页面渲染通道：点击搜索结果 → 子 WebView 渲染真实页 → outerHTML 存这，前端直接显示（不归一化/不去广告）
+	pageMu   sync.Mutex
+	pageHTML string
+	pageURL  string
+
 	// WebviewRender 宿主注入（sniff 兜底：渲染盗版站详情页，回传 outerHTML）。
 	WebviewRender func(url string)
+	// PageRender 纯页面渲染（点击搜索结果 → 渲染真实页，回传 outerHTML，不归一化/不去广告）。
+	PageRender func(url string)
 	// SearchWebviewRender 搜索渲染（Hidden 子 WebView 窗口渲染引擎页，JS 抓结构化结果 → 导航回传）。
 	// 桌面 wails3 壳注入；nil=HTTP 后备（Android 无窗口时）。
 	SearchWebviewRender func(url string)
@@ -294,6 +301,65 @@ func New(opts Options) *Instance {
 		inst.sniffMu.Unlock()
 		writeJSON(w, map[string]any{"ok": true, "url": u, "episodes": eps})
 	})
+
+	// ═══════════ 纯页面渲染通道（先不归一化/不去广告，直接渲染搜索结果真实页面）═══
+	// render-launch：触发子 WebView 渲染任意 URL（桌面壳注入 WebviewRender）
+	mux.HandleFunc("/api/page/render-launch", func(w http.ResponseWriter, rq *http.Request) {
+		u := rq.URL.Query().Get("url")
+		if u == "" {
+			writeJSON(w, map[string]any{"ok": false, "msg": "缺少 url"})
+			return
+		}
+		if inst.PageRender != nil {
+			go inst.PageRender(u) // 子窗口渲染 → outerHTML POST /api/page/render
+			writeJSON(w, map[string]any{"ok": true, "msg": "rendering"})
+			return
+		}
+		if inst.WebviewRender != nil {
+			go inst.WebviewRender(u)
+			writeJSON(w, map[string]any{"ok": true, "msg": "rendering (sniff)"})
+			return
+		}
+		writeJSON(w, map[string]any{"ok": false, "msg": "WebView 渲染不可用"})
+	})
+
+	// render：子窗口 outerHTML 回传，原样存（不 Extract，保留页面结构）。
+	// 兼容 POST body（Android Java 回传）和 GET 导航回传（桌面壳 location.href ?url=&html=）。
+	mux.HandleFunc("/api/page/render", func(w http.ResponseWriter, rq *http.Request) {
+		htmlText := rq.URL.Query().Get("html")
+		u := rq.URL.Query().Get("url")
+		if htmlText == "" && rq.Method == http.MethodPost {
+			rq.ParseForm()
+			htmlText = rq.PostFormValue("html")
+			u = rq.PostFormValue("url")
+		}
+		if htmlText == "" {
+			writeJSON(w, map[string]any{"ok": false, "msg": "缺少 html"})
+			return
+		}
+		inst.pageMu.Lock()
+		inst.pageHTML = htmlText
+		inst.pageURL = u
+		inst.pageMu.Unlock()
+		LogInfo("[page/render] 收到 outerHTML url=%s 大小=%d", u, len(htmlText))
+		writeJSON(w, map[string]any{"ok": true, "size": len(htmlText), "url": u})
+	})
+
+	// result：前端轮询拿渲染后的页面 HTML（读后清空）
+	mux.HandleFunc("/api/page/result", func(w http.ResponseWriter, _ *http.Request) {
+		inst.pageMu.Lock()
+		htmlText := inst.pageHTML
+		u := inst.pageURL
+		inst.pageHTML = ""
+		inst.pageURL = ""
+		inst.pageMu.Unlock()
+		if htmlText == "" {
+			writeJSON(w, map[string]any{"ok": false, "rendering": true})
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "url": u, "html": htmlText})
+	})
+
 
 	// 搜索盗版站（bing/360/百度 聚合，接 /api/sniff 提取集数）
 	mux.HandleFunc("/api/search/render", func(w http.ResponseWriter, rq *http.Request) {

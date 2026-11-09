@@ -346,6 +346,16 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
     </div>
   </div>
 
+  <!-- ═══════════ 真实页面查看器（点击搜索结果 → WebView 渲染 → iframe 显示，不归一化/不去广告）═══ -->
+  <div class="page" id="page-viewer">
+    <div class="hdr">
+      <div class="hdr-t"><h1 id="viewer-title">正在打开…</h1></div>
+      <button class="btn gh" onclick="goPage('search')" style="font-size:12px;padding:6px 14px">✕ 返回</button>
+    </div>
+    <div id="viewer-status" class="dim" style="padding:12px;font-size:13px">正在用内置浏览器打开页面…</div>
+    <iframe id="viewer-frame" style="width:100%;height:calc(100vh - 130px);border:none;background:#fff;border-radius:10px" sandbox="allow-scripts allow-same-origin allow-popups allow-forms"></iframe>
+  </div>
+
   <!-- ═══════════ 搜索结果页（独立页，效仿 searxng 聚合）═══ -->
   <!-- ═══════════ 媒体库（移植 OnScreen UI 结构：继续观看行 + 海报墙）═══ -->
   <div class="page" id="page-library">
@@ -1102,7 +1112,16 @@ function renderSearchRes(box, rs) {
   ).join('')+'</div>';
 }
 function pickSite(u, title) {
-  sniff(u, title);
+  // 用户要求：点击搜索结果 → 直接渲染那个真实页面（先不归一化、不去广告）
+  renderRealPage(u, title);
+}
+
+// ── 真实页面渲染（先不归一化/不去广告）：直接导航到目标 URL，浏览器自动 follow 302，显示真实页面 ──
+// 目标站多设 X-Frame-Options: SAMEORIGIN（禁止 iframe 嵌入），所以用整窗口导航而不是 iframe。
+function renderRealPage(u, title) {
+  if(!u) { toast('没有链接', false); return; }
+  // 主窗口直接导航：MyCast 窗口变成那个真实页面（自动 follow 百度 302）
+  location.href = u;
 }
 
 // ── 电视选择 ──
