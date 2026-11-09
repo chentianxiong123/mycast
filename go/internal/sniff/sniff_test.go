@@ -168,3 +168,84 @@ func TestExtractShenma(t *testing.T) {
 		}
 	}
 }
+
+// ── 去广告（CleanAds）：广告特征块被删，集数保留 ──────────────────────────
+func TestCleanAds(t *testing.T) {
+	htmlText := `<html><body>
+<div class="episodes"><a href="/vodplay/1-1.html">第1集</a><a href="/vodplay/1-2.html">第2集</a></div>
+<div class="ad-box"><a href="http://ad.com/x">充值返利</a></div>
+<div class="ggbox"><a href="http://gg.com/y">推广</a></div>
+<div id="popup" style="position:fixed"><a href="http://pop.com">弹窗</a></div>
+<iframe src="https://googleads.g.doubleclick.net/pagead/x"></iframe>
+<div class="recommend"><a href="/vod/88.html">推荐</a></div>
+</body></html>`
+	cleaned := CleanAds(htmlText)
+	if strings.Contains(cleaned, "ad-box") || strings.Contains(cleaned, "ggbox") {
+		t.Errorf("广告块未删: %s", cleaned)
+	}
+	if !strings.Contains(cleaned, "第1集") {
+		t.Errorf("集数被误删: %s", cleaned)
+	}
+	// 提取后只剩 2 集（广告/弹窗/iframe 全清）
+	e := New(Default())
+	eps := e.Extract(cleaned, "http://x.com/vod/1.html")
+	if len(eps) != 2 {
+		t.Errorf("want 2 eps after ads cleaned, got %d: %+v", len(eps), eps)
+	}
+}
+
+// ── 三路启发式检测（DetectVideoPage）：URL 信号 / og+播放器 / 集数容器 ──────
+func TestDetectVideoPage(t *testing.T) {
+	e := New(Default())
+	// 路1：URL 信号（无需 html）
+	if !e.DetectVideoPage("http://x.com/vod/123.html", "") {
+		t.Errorf("URL /vod/ 应判定影视页")
+	}
+	// 路2：og:video 元数据
+	og := `<html><head><meta property="og:video" content="http://cdn.com/v.mp4"></head><body>x</body></html>`
+	if !e.DetectVideoPage("", og) {
+		t.Errorf("og:video 应判定影视页")
+	}
+	// 路3：嵌入播放器（dplayer）
+	player := `<html><body><div id="dplayer"></div><script src="/dplayer.min.js"></script></body></html>`
+	if !e.DetectVideoPage("", player) {
+		t.Errorf("dplayer 应判定影视页")
+	}
+	// 路3b：集数容器 + 集数文本
+	container := `<html><body><ul class="episodes"><li><a href="/vodplay/1-1.html">第1集</a></li></ul></body></html>`
+	if !e.DetectVideoPage("", container) {
+		t.Errorf("集数容器应判定影视页")
+	}
+	// 纯文章页不判定
+	article := `<html><body><article><p>这是一个很长很长的新闻正文，讲天气和股市。</p></article></body></html>`
+	if e.DetectVideoPage("", article) {
+		t.Errorf("纯文章不应判定影视页")
+	}
+	// 未知 URL（无信号路径）+ 无内容 → 不判定
+	if e.DetectVideoPage("http://x.com/random/abc", "") {
+		t.Errorf("无信号不应判定影视页")
+	}
+}
+
+// ── 归一化排序（SortEpisodes）：乱序集数 → 按数字升序 ────────────────────
+func TestSortEpisodes(t *testing.T) {
+	eps := []Episode{
+		{Index: 1, Title: "第10集", URL: "/a10"},
+		{Index: 2, Title: "第2集", URL: "/a2"},
+		{Index: 3, Title: "第1集", URL: "/a1"},
+	}
+	SortEpisodes(eps)
+	if eps[0].Title != "第1集" || eps[1].Title != "第2集" || eps[2].Title != "第10集" {
+		t.Errorf("排序错: %+v", eps)
+	}
+}
+
+// ── epNumber 集数数字提取 ─────────────────────────────────────────────
+func TestEpNumber(t *testing.T) {
+	cases := map[string]int{"第1集": 1, "第12集": 12, "12集": 12, "第3期": 3, "高清": 0}
+	for in, want := range cases {
+		if got := epNumber(in); got != want {
+			t.Errorf("epNumber(%q)=%d want %d", in, got, want)
+		}
+	}
+}
