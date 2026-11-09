@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -250,9 +251,10 @@ func guessMime(s string) string {
 
 // Extract 从详情页 HTML 提取集数列表（通用规则 v2）。
 // 判定组合（满足任一即收）：
-//  1) 路径命中播放关键词 AND 文字含集数特征
-//  2) 链接在播放列表容器内 AND 文字含集数特征（不依赖具体路径，兼容 /cid/ 等）
-//  3) 链接在播放列表容器内 AND 路径含数字集数形态（macCMS /xxx/<id>-<n>-<ep>.html）
+//  1. 路径命中播放关键词 AND 文字含集数特征
+//  2. 链接在播放列表容器内 AND 文字含集数特征（不依赖具体路径，兼容 /cid/ 等）
+//  3. 链接在播放列表容器内 AND 路径含数字集数形态（macCMS /xxx/<id>-<n>-<ep>.html）
+//
 // baseURL 用于把相对 href 拼成绝对 URL。
 func (e *Extractor) Extract(htmlText, baseURL string) []Episode {
 	doc, err := html.Parse(strings.NewReader(htmlText))
@@ -284,6 +286,134 @@ func (e *Extractor) Extract(htmlText, baseURL string) []Episode {
 	}
 	walk(doc)
 	return eps
+}
+
+// CleanAds 从详情页 HTML 删除广告/干扰块（cosmetic 思路，学 uBlock #approach#）：
+//   - class/id 含广告特征词（ad/adv/promo/banner/gg/guanggao/advert/pop/float）的整块
+//   - <script style> 内嵌广告、第三方统计/广告 iframe（src 含 ad/gg/googlesyndication/doubleclick）
+//   - 弹窗/fixed 层（style 含 position:fixed 或 class 含 pop/dialog/mask）
+//
+// 返回清理后的 htmlText（供 Extract 用）。正则+DOM 两层：先用正则删整段广告脚本，再 DOM 删节点。
+func CleanAds(htmlText string) string {
+	if htmlText == "" {
+		return ""
+	}
+	// 层1：正则删广告脚本块/iframe（整段，含跨行）
+	for _, re := range []*regexp.Regexp{
+		regexp.MustCompile(`(?is)<script[^>]*(?:ad|adv|promo|banner|gg|guanggao)[^>]*>.*?</script>`),
+		regexp.MustCompile(`(?is)<iframe[^>]*(?:ad|gg|guanggao|googlesyndication|doubleclick|adsbygoogle)[^>]*>.*?</iframe>`),
+		regexp.MustCompile(`(?is)<ins[^>]*class="adsbygoogle"[^>]*>.*?</ins>`),
+		// 外域注入脚本：src 非站内域 + 带 rid= 随机参数 + 伪装图片扩展名（hxuxv7vx0.com 等广告注入商）
+		regexp.MustCompile(`(?is)<script[^>]*src=["']https?://[^"']+[/?][^"']*rid=[^"']*["'][^>]*>\s*</script>`),
+	} {
+		htmlText = re.ReplaceAllString(htmlText, "")
+	}
+	// 层2：DOM 删广告特征块（class/id/onclick/style 命中）
+	doc, err := html.Parse(strings.NewReader(htmlText))
+	if err != nil {
+		return htmlText
+	}
+	var remove func(*html.Node) bool
+	remove = func(n *html.Node) bool {
+		if n.Type == html.ElementNode && isAdNode(n) {
+			return true // 整块删（含子节点）
+		}
+		for c := n.FirstChild; c != nil; {
+			next := c.NextSibling
+			if remove(c) {
+				n.RemoveChild(c)
+			}
+			c = next
+		}
+		return false
+	}
+	// 从根（DocumentNode 的子：html 元素）开始
+	for c := doc.FirstChild; c != nil; {
+		next := c.NextSibling
+		if remove(c) {
+			doc.RemoveChild(c)
+		}
+		c = next
+	}
+	var sb strings.Builder
+	html.Render(&sb, doc)
+	return sb.String()
+}
+
+// adKeywords class/id 命中即广告块（常见于盗版站的推广位/弹窗/悬浮）。
+// 注意：裸 "ad"/"adv" 太宽（list4/address/head 都含），**不在这里用裸词**；
+// 用带边界的形态（ad- / _ad / ad_ / -ad），或独立常见广告容器类。
+var adKeywords = []string{
+	"ad-box", "ad-6", "ad_container", "ad_container", "ad_banner", "ad-footer",
+	"ad-gallery", "ad-list", "ad-link", "ad-slot", "ad-wrap", "adwrapper",
+	"ads-box", "adsbygoogle", "ads_container", "adsense", "advert", "adverts",
+	"advertise", "advertisement", "promo", "promobox", "banner-ad", "banner_box",
+	"gg-box", "ggbox", "guanggao", "ggad", "playAd", "tuijian_gg", "pcd_ad",
+	"pc-ad", "side_ad", "top_ad", "foot_ad", "adver",
+}
+
+// isAdNode 判定某元素是否广告块（id/class/onclick/style 命中广告特征）。
+// 规则（避免裸 ad 误杀）：
+//   - class/id 用 adKeywords 词匹配（全是带边界的广告形态）
+//   - style 含 position:fixed + (pop/ad/gg) 命中才删（悬浮弹窗）
+func isAdNode(n *html.Node) bool {
+	attrs := strings.ToLower(strings.Join(func() []string {
+		var s []string
+		for _, a := range n.Attr {
+			if a.Key == "id" || a.Key == "class" || a.Key == "onclick" || a.Key == "style" || a.Key == "data-ad" || a.Key == "data-gg" {
+				s = append(s, a.Val)
+			}
+		}
+		return s
+	}(), " "))
+	if attrs == "" {
+		return false
+	}
+	// 弹窗/fixed 悬浮（style 含 position:fixed，且不在播放器区）
+	if strings.Contains(attrs, "position:fixed") || strings.Contains(attrs, "position: fixed") {
+		if strings.Contains(attrs, "pop") || strings.Contains(attrs, "gg") {
+			return true
+		}
+	}
+	for _, kw := range adKeywords {
+		if strings.Contains(attrs, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// epNumber 从集数文本提取数字（第N集/N集/N/N-N），无数字返回 0（排序用）。
+func epNumber(text string) int {
+	m := reEPNumDigit.FindStringSubmatch(text)
+	if m != nil {
+		// 分支1：第N集 → m[1]；分支2：N集 → m[2]
+		for _, s := range m[1:] {
+			if s != "" {
+				n, _ := strconv.Atoi(s)
+				return n
+			}
+		}
+		return 0
+	}
+	// 兜底：取第一个数字
+	m = reAnyDigit.FindStringSubmatch(text)
+	if m == nil {
+		return 0
+	}
+	n, _ := strconv.Atoi(m[1])
+	return n
+}
+
+// SortEpisodes 集数归一化：按集数数字升序排序（稳定：同号保留原序），不去重由调用方 seen 保证。
+func SortEpisodes(eps []Episode) {
+	sort.SliceStable(eps, func(i, j int) bool {
+		a, b := epNumber(eps[i].Title), epNumber(eps[j].Title)
+		if a != b {
+			return a < b
+		}
+		return false
+	})
 }
 
 // ExtractPoster 从详情页 HTML 提取封面图 URL（学 OnScreen artwork，但抓站点图）。
@@ -382,6 +512,11 @@ func isEpisodeLink(a *html.Node, href, text string, cfg Config) bool {
 	if text == "" {
 		return false
 	}
+	// 排除导航位：上一集/下一集/上集/下集（含"集"但非集数项）。先剥 iconfont 私有区字符（PUA \uE000-\uF8FF）。
+	clean := stripPUA(text)
+	if reNavEpi.MatchString(clean) {
+		return false
+	}
 	epStrict := reEPStrict.MatchString(text)
 	epAny := reEPNum.MatchString(text)
 	pathHit := isPlayLink(href, cfg.PlayPath)
@@ -393,7 +528,7 @@ func isEpisodeLink(a *html.Node, href, text string, cfg Config) bool {
 			return true
 		}
 	}
-	// 次判据：不在容器内，仅严格"第N集" + 路径命中（排除"下一集"/推荐位）
+	// 次判据：不在容器内，仅严格“第N集” + 路径命中（排除“下一集”/推荐位）
 	if !inContainer && epStrict && pathHit {
 		return true
 	}
@@ -454,11 +589,120 @@ func (e *Extractor) ExtractURL(rawURL string) ([]Episode, error) {
 	if !isLegitDomain(rawURL) && NeedsBrowser(htmlText) {
 		return nil, ErrNeedsBrowser
 	}
-	eps := e.Extract(htmlText, rawURL)
+	eps := e.Extract(CleanAds(htmlText), rawURL)
 	if len(eps) == 0 {
 		return nil, errors.New("no episodes found")
 	}
+	SortEpisodes(eps)
 	return eps, nil
+}
+
+// DetectVideoPage 三路启发式：不写死站点列表，判定"这个页面是不是影视详情页（需要提取集数）"。
+// 学 yt-dlp GenericIE（不靠站点名单，靠页面信号）：
+//  1. URL 信号：路径含播放/详情关键词（/vod/ /detail/ /show/ /play/ 等）
+//  2. 元数据信号：og:video / og:type=video.* / 嵌入播放器（dplayer/videojs/jwplayer/ckplayer 等）
+//  3. 内容信号：页内存在播放列表容器（class/id 命中 playlist/episodes 等）且文本含集数特征
+//
+// 三路任一命中即判定为影视页。扛住 URL 换成乱码/换路径的站。
+func (e *Extractor) DetectVideoPage(rawURL, htmlText string) bool {
+	if rawURL != "" && isDetailURL(rawURL) {
+		return true // 路1：URL 信号
+	}
+	if htmlText != "" && e.hasVideoSignal(htmlText) {
+		return true // 路2/3：内容信号（og/播放器/集数容器）
+	}
+	return false
+}
+
+// isDetailURL URL 路径信号：详情/播放关键词（比旧 IsDetailPage 更多，含播放列表容器类路径）。
+func isDetailURL(rawURL string) bool {
+	href := strings.ToLower(rawURL)
+	for _, p := range []string{
+		"/vod/", "/voddetail/", "/detail/", "/video/", "/movie/", "/tv/",
+		"/play/", "/vodplay/", "/episode/", "/ep/", "/cid/", "/show/", "/view/", "/watch/",
+		"/dsj/", "/zongyi/", "/dianying/", "/subject/", "/index/", "/widget/", "/tpl/",
+	} {
+		if strings.Contains(href, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasVideoSignal 页面内容信号：og 元数据 / 嵌入播放器 / 集数容器+集数文本。
+func (e *Extractor) hasVideoSignal(htmlText string) bool {
+	doc, err := html.Parse(strings.NewReader(htmlText))
+	if err != nil {
+		return false
+	}
+	foundMeta := false
+	foundPlayer := false
+	foundContainer := false
+
+	// 播放器特征（JS 库/标签/属性，学 yt-dlp 嵌入播放器检测）
+	playerHints := []string{
+		"dplayer", "videojs", "video-js", "jwplayer", "ckplayer", "ckplayerjs",
+		"playerjs", "artplayer", "xgplayer", "hls.js", "flvplayer", "aplayer",
+		"data-player", "tvfan", "mac_play", "MacPlayer", "playjs", "xu1g",
+	}
+	// 集数容器（class/id 命中播放列表标记，与 ContainerMarkers 同源）
+	containerMarkers := map[string]bool{}
+	for _, m := range e.cfg.ContainerMarkers {
+		containerMarkers[strings.ToLower(m)] = true
+	}
+
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type != html.ElementNode {
+			for c := n.FirstChild; c != nil; c = c.NextSibling {
+				walk(c)
+			}
+			return
+		}
+		// og 元数据
+		if n.Data == "meta" {
+			prop := strings.ToLower(getAttr(n, "property"))
+			name := strings.ToLower(getAttr(n, "name"))
+			if strings.Contains(prop, "og:video") || strings.Contains(prop, "og:type") &&
+				(strings.Contains(getAttr(n, "content"), "video") || strings.Contains(getAttr(n, "content"), "movie")) ||
+				strings.Contains(name, "video") && strings.Contains(getAttr(n, "content"), "video") {
+				foundMeta = true
+			}
+		}
+		// 播放器
+		if n.Data == "script" || n.Data == "div" || n.Data == "iframe" || n.Data == "video" {
+			src := strings.ToLower(getAttr(n, "src") + " " + getAttr(n, "data-player") + " " + getAttr(n, "id") + " " + getAttr(n, "class"))
+			if n.Data == "video" {
+				foundPlayer = true
+			}
+			for _, h := range playerHints {
+				if strings.Contains(src, h) {
+					foundPlayer = true
+					break
+				}
+			}
+		}
+		// 集数容器：class/id 命中最长标记，且子文本含集数特征
+		if !foundContainer && (n.Data == "div" || n.Data == "ul" || n.Data == "ol" || n.Data == "select") {
+			id := strings.ToLower(getAttr(n, "id"))
+			cls := strings.ToLower(getAttr(n, "class"))
+			hit := false
+			for m := range containerMarkers {
+				if strings.Contains(id, m) || strings.Contains(cls, m) {
+					hit = true
+					break
+				}
+			}
+			if hit && reEPNum.MatchString(nodeText(n)) {
+				foundContainer = true
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(doc)
+	return foundMeta || foundPlayer || foundContainer
 }
 
 // isLegitDomain 已知正版平台域名：这些站的页面可能含 verify/wappass 字样，但走正常提取，不触发 WebView 兜底。
@@ -491,7 +735,13 @@ func isPlayLink(href string, paths []string) bool {
 }
 
 func resolveHref(base *url.URL, href string) string {
-	if href == "" || strings.HasPrefix(href, "javascript:") || strings.HasPrefix(href, "#") {
+	href = strings.TrimSpace(href)
+	// 清洗页面里的转义（zanpiancms 模板常写成 \"/bofang/x.html\"）：删残留反斜杠与引号
+	href = strings.ReplaceAll(href, `\"`, "")
+	href = strings.ReplaceAll(href, `\/`, "/")
+	href = strings.ReplaceAll(href, `\\`, "")
+	href = strings.Trim(href, `"'`)
+	if href == "" || strings.HasPrefix(href, "javascript:") || strings.HasPrefix(href, "#") || strings.HasPrefix(href, "data:") {
 		return ""
 	}
 	if base != nil {
@@ -500,6 +750,16 @@ func resolveHref(base *url.URL, href string) string {
 		}
 	}
 	return href
+}
+
+// stripPUA 剥掉 iconfont 私有区字符（\uE000-\uF8FF），这些是图标字体占位，干扰文字判定。
+func stripPUA(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r >= 0xE000 && r <= 0xF8FF {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 func getAttr(n *html.Node, key string) string {
@@ -516,7 +776,7 @@ func nodeText(n *html.Node) string {
 	var walk func(*html.Node)
 	walk = func(n *html.Node) {
 		if n.Type == html.TextNode {
-		sb.WriteString(n.Data)
+			sb.WriteString(n.Data)
 		}
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
 			walk(c)
@@ -528,6 +788,15 @@ func nodeText(n *html.Node) string {
 
 // 集数文字正则（宽）：第N集 / N集 / 第N期 / 全集 / 正片 / 番外 / 特辑。
 var reEPNum = regexp.MustCompile(`第\s*\d+\s*[集期话]|\d+\s*集|全集|正片|番外|特辑`)
+
+// reEPNumDigit 提取集数数字：第N集 / 第N期 / N集 / 第N话。
+var reEPNumDigit = regexp.MustCompile(`第\s*(\d+)\s*[集期话]|(\d+)\s*集`)
+
+// reAnyDigit 兜底：取文本第一个数字（排序用）。
+var reAnyDigit = regexp.MustCompile(`(\d{1,4})`)
+
+// reNavEpi 导航位文字：上一集/下一集/上集/下集/上一话（含"集"但非集数项，排除）。
+var reNavEpi = regexp.MustCompile(`^(上一|下一|上|下|前一|后一)[集期话]`)
 
 // 严格集数文字：第N集 / 第N期 / 第N话（排除"下一集"等导航词）。
 var reEPStrict = regexp.MustCompile(`第\s*\d+\s*[集期话]`)
