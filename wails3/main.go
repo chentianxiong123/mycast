@@ -40,17 +40,22 @@ func renderPage(app *application.App, targetURL, apiPath string) {
 		Height:           700,
 		BackgroundColour: application.NewRGB(17, 17, 17),
 		URL:              targetURL,
+		Hidden:           true, // 用户无感：不弹新窗口，结果在主窗口 iframe 显示
 	})
 	go func() {
-		// 等页面渲染（Cloudflare 挑战/JS 反爬通常要几秒；轮询等 HTML 里有内容）
+		// 等页面渲染（Cloudflare 挑战/JS 反爬通常要几秒；轮询等 HTML 里有内容）。
+		// 百度 link?url= 是 302 跳转：等跳转到目标站（title 不再是百度安全验证）+ 页面有内容。
 		time.Sleep(6 * time.Second)
 		js := fmt.Sprintf(`(function(){
 		  try{
 		    var html = document.documentElement.outerHTML;
-		    var xhr = new XMLHttpRequest();
-		    xhr.open('POST', 'http://127.0.0.1:%s%s?url=' + encodeURIComponent('%s'), true);
-		    xhr.setRequestHeader('Content-Type','text/plain');
-		    xhr.send(html);
+		    // form POST 回传（绕开 XHR 跨源限制；html 是整页几十KB，用 POST body 而不是 URL）
+		    var f=document.createElement('form');
+		    f.method='POST'; f.action='http://127.0.0.1:%s%s';
+		    f.style.display='none';
+		    var i1=document.createElement('input'); i1.name='html'; i1.value=html; f.appendChild(i1);
+		    var i2=document.createElement('input'); i2.name='url'; i2.value=%q; f.appendChild(i2);
+		    document.body.appendChild(f); f.submit();
 		  }catch(e){}
 		})();`, port, apiPath, targetURL)
 		win.ExecJS(js)
@@ -152,6 +157,7 @@ func main() {
 	bootJS := `
 	window.hc = {
 	  sniffRender: function(url){ fetch('/api/sniff/render-launch?url='+encodeURIComponent(url)); },
+	  pageRender: function(url){ fetch('/api/page/render-launch?url='+encodeURIComponent(url)); },
 	  searchRender: function(url){ fetch('/api/search/render-launch?url='+encodeURIComponent(url)); },
 	  searchEngine: function(engine, url){ window.__se_engine=engine; fetch('/api/search/render-launch?url='+encodeURIComponent(url)); }
 	};`
@@ -170,6 +176,11 @@ func main() {
 	// 注册渲染兜底：后端 /api/sniff/render-launch 触发开子窗口。
 	inst.WebviewRender = func(targetURL string) {
 		renderPage(app, targetURL, "/api/sniff/render")
+	}
+	// 纯页面渲染（点击搜索结果 → 真实页，不归一化/不去广告）：POST /api/page/render
+	inst.PageRender = func(targetURL string) {
+		log.Printf("[main] PageRender 触发: %s", targetURL)
+		renderPage(app, targetURL, "/api/page/render")
 	}
 	// 搜索渲染：Hidden 子 WebView 窗口渲染引擎页 + JS 抓结构化 + 导航回传（用户无感）。
 	inst.SearchWebviewRender = func(targetURL string) {
