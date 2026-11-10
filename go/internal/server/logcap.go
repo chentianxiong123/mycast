@@ -120,3 +120,12 @@ func splitLines(s string) []string {
 	}
 	return out
 }
+
+// ClearLog 清空日志文件（清空按钮调 /api/logs/clear）。
+// 旧实现：前端只清 DOM 不清文件，pollLogs 每 2.5s 从文件拉回 → 假清空。
+func ClearLog() {
+	if logFile == "" {
+		return
+	}
+	_ = os.Truncate(logFile, 0)
+}

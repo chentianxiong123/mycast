@@ -40,6 +40,10 @@ body{
 .sniffrow{display:flex;gap:10px;margin-bottom:8px;align-items:center}
 .inp{flex:1;height:40px;background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:0 12px;color:var(--fg);font-size:13px;outline:none;min-width:0}
 .inp:focus{border-color:var(--acc);box-shadow:0 0 0 3px rgba(255,77,109,.12)}
+/* 搜索引擎下拉：深底浅字（WebKitGTK 原生 select 默认白底蓝字看不清） */
+/* 所有下拉（搜索引擎/日志等级等）：深底浅字。WebKitGTK 原生 select 白底黑字、忽略 CSS background，须 appearance:none 强制 */
+select.inp{appearance:none;-webkit-appearance:none;background:var(--card2);color:var(--fg);border:1px solid var(--line);padding:0 24px 0 10px}
+select.inp option{background:var(--card2);color:var(--fg)}
 .sniffeps{font-size:11px;color:var(--dim)}
 .eps{max-height:240px;overflow-y:auto}
 .ep{display:flex;align-items:center;gap:7px;padding:5px 6px;border-bottom:1px solid var(--line);cursor:pointer}
@@ -304,11 +308,17 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
 
   <!-- ═══════════ 首页（家庭影院：搜索 → 选站 → 集数 → 投屏，一条主链路）═══════════ -->
   <div class="page active" id="page-search">
+    <!-- 搜索记录（放上面：打开就能点最近搜的）-->
+    <div class="card">
+      <h2>搜索记录</h2>
+      <div class="recent" id="search-hist"><div class="dim">还没有搜索记录。</div></div>
+    </div>
+
     <!-- 搜索（妈妈的唯一入口）-->
     <div class="card">
       <div class="hero-q">想看什么？</div>
       <div class="sniffrow">
-        <input class="inp big-inp" id="search-q" value="繁花" placeholder="剧名 / 关键词，如：繁花 在线观看" onkeydown="if(event.key==='Enter')searchSites()">
+        <input class="inp big-inp" id="search-q" value="" placeholder="剧名 / 关键词，如：繁花 在线观看" onkeydown="if(event.key==='Enter')searchSites()">
         <select class="inp" id="search-engine" style="width:auto;max-width:100px;flex:0 0 auto" title="搜索引擎">
           <option value="baidu">百度</option>
           <option value="bing">Bing</option>
@@ -317,8 +327,6 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
         </select>
         <button class="btn pri big-btn" onclick="searchSites()">搜索</button>
       </div>
-      <!-- 引擎筛选 tab（searxng 聚合效果，默认隐藏）-->
-      <div class="sx-tabs hidden" id="sr-tabs" style="margin-top:10px"></div>
       <div id="search-res" class="sniffeps"><div class="dim">搜剧 → 选网站 → 点集数 → 电视开播</div></div>
     </div>
 
@@ -339,11 +347,6 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
       </div>
     </div>
 
-    <!-- 搜索记录（点击重搜）-->
-    <div class="card">
-      <h2>搜索记录</h2>
-      <div class="recent" id="search-hist"><div class="dim">还没有搜索记录。</div></div>
-    </div>
   </div>
 
   <!-- ═══════════ 真实页面查看器（点击搜索结果 → WebView 渲染 → iframe 显示，不归一化/不去广告）═══ -->
@@ -468,6 +471,20 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
       <div id="sniff-status" class="sniffeps"><div class="dim">给懂行的：粘贴详情页链接提取集数（JS 反爬自动用内置浏览器）。结果回到首页集数列表。</div></div>
     </div>
     <div class="card">
+      <h2>mock 测试（方向B 验证）</h2>
+      <div class="sniffrow">
+        <button class="btn gh" onclick="renderRealPage(location.origin+'/mock','真情(mock)')">点 mock 影视页</button>
+        <span class="dim" style="font-size:11px">模拟 sandat 结构，验证 点结果→子窗口渲染→判断→集数</span>
+      </div>
+    </div>
+    <div class="card">
+      <h2>js 注入测试（方向C 验证）</h2>
+      <div class="sniffrow">
+        <button class="btn gh" onclick="window.hc.openInject('https://www.njtrdl.com/bofang/366547-1-130.html')">js 注入 njtrdl</button>
+        <span class="dim" style="font-size:11px">可见 WebView 打开真页 + 直接注入 JS 去广告/归一化/集数提取（无 node/curl）</span>
+      </div>
+    </div>
+    <div class="card">
       <h2>日志</h2>
       <div class="dim" style="font-size:11px">已独立成「日志」页（tab 📋），<a onclick="goPage('logs')" style="color:var(--acc);cursor:pointer">点这里跳转</a>。</div>
     </div>
@@ -549,8 +566,6 @@ const ENGINE_META = {
   so:   {name:'360',    icon:'36'},
   sogou:{name:'搜狗',   icon:'狗'},
 };
-let srCurEngine = 'all'; // 当前引擎 tab 过滤（all=全部聚合）
-
 let srResults = []; // 当前真实搜索结果（/api/search 返回）
 
 // 真搜索（单引擎 webview 渲染）：读下拉选引擎 → /api/search?engine=xxx → 轮询 /api/search/result
@@ -559,7 +574,6 @@ async function mockSearch() {
   if(!q) { toast('输入关键词', false); return; }
   const box = document.getElementById('search-res');
   const eng = document.getElementById('search-engine')?.value || 'baidu';
-  document.getElementById('sr-tabs').classList.remove('hidden');
   const em = ENGINE_META[eng] || {name:eng};
   box.innerHTML = '<div class="dim">'+em.name+' 渲染中…（单引擎 WebView，无感）</div>';
   try {
@@ -582,31 +596,18 @@ function pollSearchResult(box, tries) {
   }).catch(()=>setTimeout(()=>pollSearchResult(box, tries-1), 700));
 }
 
-// 显示搜索结果（searxng 聚合 + 引擎 tab）
+// 显示搜索结果
 function showSearchResults(results, box) {
   srResults = results||[];
-  srCurEngine = 'all';
-  renderSearchTabs();
   renderSearchList();
   toast('搜到 '+srResults.length+' 条');
 }
-
-// 渲染引擎分类 tab（效仿 searxng：从真实结果的引擎动态生成，全部/百度/360/Bing/搜狗）
-function renderSearchTabs() {
-  const tab = document.getElementById('sr-tabs');
-  if(!tab) return;
-  const engines = [...new Set(srResults.map(r=>r.engine))]; // 只显示有结果的引擎
-  let html = '<div class="sx-tab'+(srCurEngine==='all'?' on':'')+'" onclick="setSrEngine(\'all\')">全部</div>';
-  engines.forEach(e=>{ html += '<div class="sx-tab'+(srCurEngine===e?' on':'')+'" onclick="setSrEngine(\''+e+'\')">'+(ENGINE_META[e]?.name||e)+'</div>'; });
-  tab.innerHTML = html;
-}
-function setSrEngine(e) { srCurEngine = e; renderSearchTabs(); renderSearchList(); }
 
 // 渲染结果列表（searxng 聚合样式：favicon + 标题 + URL + 摘要 + 引擎）——渲染到搜索页内 #search-res
 function renderSearchList() {
   const box = document.getElementById('search-res');
   if(!box) return;
-  const list = srResults.filter(r => srCurEngine==='all' || r.engine===srCurEngine);
+  const list = srResults;
   if(!list.length) { box.innerHTML = '<div class="dim" style="padding:16px 0;text-align:center">没有结果</div>'; return; }
   box.innerHTML = '<div class="sres">'+list.map(r => {
     const em = ENGINE_META[r.engine] || {name:r.engine, icon:(r.engine||'?')[0]};
@@ -1116,12 +1117,38 @@ function pickSite(u, title) {
   renderRealPage(u, title);
 }
 
-// ── 真实页面渲染（先不归一化/不去广告）：直接导航到目标 URL，浏览器自动 follow 302，显示真实页面 ──
-// 目标站多设 X-Frame-Options: SAMEORIGIN（禁止 iframe 嵌入），所以用整窗口导航而不是 iframe。
+// ── 真实页面渲染（方向B）：子窗口渲染 → 后端判断影视页 → 套进去（显示集数）/ 导航真实页 ──
+// 用户拍板：保持现在能加搜索结果筛选，点链接跳转时判断是不是影视页。
 function renderRealPage(u, title) {
   if(!u) { toast('没有链接', false); return; }
-  // 主窗口直接导航：MyCast 窗口变成那个真实页面（自动 follow 百度 302）
-  location.href = u;
+  // 无壳（Android 旧/无 pageRender 桥）：直接导航真实页（兜底 v0.13.3 行为）
+  if(!window.hc || !window.hc.pageRender) { location.href = u; return; }
+  goPage('home');
+  epLoading('识别页面…');
+  window.hc.pageRender(u); // 子窗口渲染 → outerHTML POST /api/page/render（后端判断+提取）
+  pollPageResult(u, title, 30);
+}
+
+// 轮询 /api/page/result：影视页→显示集数（套进去）；非影视→主窗口导航真实页
+function pollPageResult(u, title, tries) {
+  fetch('/api/page/result').then(r=>r.json()).then(d=>{
+    if(d.ok) {
+      if(d.is_video && d.episodes && d.episodes.length) {
+        // 识别到影视页 + 集数：套进去（集数卡片，点集数投屏）
+        renderEpsGrid(d.episodes, title || d.url || '');
+        toast('识别到 '+(d.episodes||[]).length+' 集');
+      } else {
+        // 非影视页（或影视页无集数）：主窗口导航真实页（保留 v0.13.3 浏览行为）
+        location.href = u;
+      }
+    } else {
+      if(tries<=0) { location.href = u; return; }
+      setTimeout(()=>pollPageResult(u, title, tries-1), 700);
+    }
+  }).catch(()=>{
+    if(tries<=0) { location.href = u; return; }
+    setTimeout(()=>pollPageResult(u, title, tries-1), 700);
+  });
 }
 
 // ── 电视选择 ──
@@ -1399,7 +1426,8 @@ function toggleLogPause() {
   logPaused = !logPaused;
   document.getElementById('log-pause-btn').textContent = logPaused ? '▶' : '⏸';
 }
-function clearLogs() {
+async function clearLogs() {
+  try { await fetch('/api/logs/clear'); } catch(e){} // 真清空：调后端清 logFile（旧实现只清 DOM → 假清空）
   document.getElementById('log-list').innerHTML = '<div class="dim">已清空（新日志仍会继续追加）</div>';
   lastLogs = [];
 }
@@ -1443,8 +1471,6 @@ document.addEventListener('DOMContentLoaded', () => {
 setInterval(()=>{ refresh(); pollPlay(); }, 1000);
 setInterval(pollLogs, 2500);
 refresh(); pollPlay(); pollLogs(); loadSearchHistory(); loadLibrary();
-// demo 验证：载入即真搜（看 searxng 渲染真结果），确认后删
-setTimeout(()=>{ mockSearch(); }, 400);
 // demo 阶段：载入即展示独立搜索结果页（mock 数据），看 searxng 聚合格式
 
 </script>

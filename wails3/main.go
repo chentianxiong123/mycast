@@ -90,6 +90,8 @@ func searchRenderPage(app *application.App, targetURL string) {
 	    return false;
 	  }
 	  function grab(){
+	    if(window.__seDone) return; // 防重入：同一页面只回传一次（百度页刷新会重新执行注入 JS）
+	    window.__seDone = true;
 	    try{
 	      var items=[]; var seen={};
 	      var sels=['h3 a','h3','.result a','[class*="title"] a','.vrwrap a','li a','a'];
@@ -113,7 +115,7 @@ func searchRenderPage(app *application.App, targetURL string) {
 	  if(document.readyState==='complete') setTimeout(waitAndGrab, 1000);
 	  else window.addEventListener('load', function(){ setTimeout(waitAndGrab, 1000); });
 	})();`, port, engine, port, engine)
-	app.Window.NewWithOptions(application.WebviewWindowOptions{
+	win := app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:            "search-render",
 		Width:            1,
 		Height:           1,
@@ -122,7 +124,78 @@ func searchRenderPage(app *application.App, targetURL string) {
 		JS:               js,
 		Hidden:           true, // 用户无感
 	})
+	// 修 bug：抓取回传后关窗。否则子窗口不死，百度页周期刷新→重新执行注入 JS→每 22 秒回传一次（结果=0）。
+	// waitAndGrab 上限 15s，16s 后关窗兜底（覆盖抓取周期）。
+	go func() {
+		time.Sleep(16 * time.Second)
+		win.Close()
+	}()
 }
+
+// openInjectPage 用可见 WebView 打开目标站 + 直接注入 JS（去广告/归一化/集数提取）。
+// 不做子窗口回传、不用 node/curl：页面内 JS 直接清洗面板。
+// 注入用 WebviewWindowOptions.JS（页面加载自动注入，像 searchRenderPage 验证过的机制），
+// 不用 win.ExecJS（固定 sleep 后手动注入，页面加载中易静默失败）。
+func openInjectPage(app *application.App, targetURL string) {
+	app.Window.NewWithOptions(application.WebviewWindowOptions{
+		Title:            "注入测试",
+		Width:            1000,
+		Height:           800,
+		BackgroundColour: application.NewRGB(17, 17, 17),
+		URL:              targetURL,
+		JS:               injectJS, // 页面加载自动注入（wails3 在 DOM 就绪后执行）
+		Hidden:           false,     // 可见：用户能看真页 + 注入后集数面板
+	})
+}
+
+// injectJS 方向C：JS 版去广告 + 归一化 + 集数提取 + 显示面板（对应 sniff.go 的 Go 逻辑）。
+// 页面内直接做：删广告节点/脚本/弹窗 → 提集数（第N集，排除上一/下一集）→ 排序归一化 → 浮层面板。
+const injectJS = `(function(){
+  try{
+    // ── 提取集数（页面内 JS，非 HTTP）──
+    var eps=[],seen={};
+    document.querySelectorAll('a').forEach(function(a){
+      var href=(a.getAttribute('href')||'').trim(), text=(a.textContent||'').trim();
+      if(!href||href.indexOf('javascript:')===0||href==='#')return;
+      var clean=text.replace(/[\uE000-\uF8FF]/g,'');
+      if(/^(上一|下一|上|下|前一|后一)[集期话]/.test(clean))return;
+      if(/第\s*\d+\s*[集期话]/.test(text)){
+        var full; try{full=new URL(href,location.href).href;}catch(e){return;}
+        if(!seen[full]){seen[full]=1;eps.push({t:text,u:full});}
+      }
+    });
+    eps.sort(function(a,b){return (parseInt((a.t.match(/\d+/)||[0])[0])||0)-(parseInt((b.t.match(/\d+/)||[0])[0])||0);});
+    // ── 屏蔽站点：body 整个替换成我们的格式（标题 + 播放器 + 集数卡片）──
+    var title=(document.title||'').replace(/_.*/,'').replace(/在线观看.*/,'').replace(/ -.*/,'').trim()||'剧集';
+    document.body.innerHTML=''
+      +'<div style="max-width:960px;margin:0 auto;padding:18px;font-family:system-ui,sans-serif;color:#e4e9f2;background:#0f1115;min-height:100vh">'
+      +'<h2 style="margin:0 0 14px;font-size:20px">'+title+' <span style="color:#ff4d6d;font-size:13px;font-weight:400">集数 '+eps.length+'</span></h2>'
+      +'<video id="mc-video" controls playsinline style="width:100%;background:#000;border-radius:10px;margin-bottom:16px;aspect-ratio:16/9"></video>'
+      +'<div style="color:#8a93a6;font-size:13px;margin-bottom:10px">点集数 → 嗅探拿流 → 本播放器播放</div>'
+      +'<div id="mc-grid" style="display:flex;flex-wrap:wrap;gap:8px;max-height:56vh;overflow-y:auto"></div>'
+      +'</div>';
+    var grid=document.getElementById('mc-grid');
+    if(!eps.length){ grid.innerHTML='<div style="color:#ff4d6d">未识别到集数（可能非影视页/注入时机）</div>'; return; }
+    eps.forEach(function(e){
+      var c=document.createElement('button');c.textContent=e.t;
+      c.style.cssText='padding:8px 12px;border-radius:6px;background:#1a1e2a;color:#e4e9f2;border:1px solid #222838;cursor:pointer;font-size:13px';
+      c.onclick=function(){
+        var v=document.getElementById('mc-video');
+        fetch('http://127.0.0.1:18080/api/cast?url='+encodeURIComponent(e.u)+'&title='+encodeURIComponent(e.t),{mode:'cors'})
+          .then(function(r){return r.json();})
+          .then(function(d){
+            if(d.ok){
+              if(window.Hls&&Hls.isSupported()&&/m3u8/.test(d.url)){ if(v.__hls)v.__hls.destroy(); v.__hls=new Hls(); v.__hls.loadSource(d.url); v.__hls.attachMedia(v); }
+              else { v.src=d.url; }
+              v.play();
+            } else alert(d.msg||'拿流失败');
+          }).catch(function(){alert('拿流失败');});
+      };
+      grid.appendChild(c);
+    });
+    console.log('[mc-inject] 转化完成: '+eps.length+' 集');
+  }catch(e){console.log('[mc-inject] 错误: '+e.message);}
+})();`
 
 func main() {
 
@@ -158,6 +231,7 @@ func main() {
 	window.hc = {
 	  sniffRender: function(url){ fetch('/api/sniff/render-launch?url='+encodeURIComponent(url)); },
 	  pageRender: function(url){ fetch('/api/page/render-launch?url='+encodeURIComponent(url)); },
+	  openInject: function(url){ fetch('/api/page/inject-launch?url='+encodeURIComponent(url)); },
 	  searchRender: function(url){ fetch('/api/search/render-launch?url='+encodeURIComponent(url)); },
 	  searchEngine: function(engine, url){ window.__se_engine=engine; fetch('/api/search/render-launch?url='+encodeURIComponent(url)); }
 	};`
@@ -181,6 +255,11 @@ func main() {
 	inst.PageRender = func(targetURL string) {
 		log.Printf("[main] PageRender 触发: %s", targetURL)
 		renderPage(app, targetURL, "/api/page/render")
+	}
+	// 方向C：可见 WebView 打开目标站 + 直接注入 JS（去广告/归一化/集数提取），不回传。
+	inst.PageInject = func(targetURL string) {
+		log.Printf("[main] PageInject 触发: %s", targetURL)
+		openInjectPage(app, targetURL)
 	}
 	// 搜索渲染：Hidden 子 WebView 窗口渲染引擎页 + JS 抓结构化 + 导航回传（用户无感）。
 	inst.SearchWebviewRender = func(targetURL string) {
