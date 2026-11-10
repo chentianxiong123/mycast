@@ -52,14 +52,18 @@ type Instance struct {
 	sniffURL    string
 
 	// 纯页面渲染通道：点击搜索结果 → 子 WebView 渲染真实页 → outerHTML 存这，前端直接显示（不归一化/不去广告）
-	pageMu   sync.Mutex
-	pageHTML string
-	pageURL  string
+	pageMu       sync.Mutex
+	pageHTML     string
+	pageURL      string
+	pageIsVideo  bool            // 方向B：DetectVideoPage 判断（点结果→识别影视页）
+	pageEps      []sniff.Episode // 方向B：提取的集数（识别并套进去）
 
 	// WebviewRender 宿主注入（sniff 兜底：渲染盗版站详情页，回传 outerHTML）。
 	WebviewRender func(url string)
 	// PageRender 纯页面渲染（点击搜索结果 → 渲染真实页，回传 outerHTML，不归一化/不去广告）。
 	PageRender func(url string)
+	// PageInject 方向C：可见 WebView 打开目标站 + 直接注入 JS（去广告/归一化/集数提取），不回传。
+	PageInject func(url string)
 	// SearchWebviewRender 搜索渲染（Hidden 子 WebView 窗口渲染引擎页，JS 抓结构化结果 → 导航回传）。
 	// 桌面 wails3 壳注入；nil=HTTP 后备（Android 无窗口时）。
 	SearchWebviewRender func(url string)
@@ -163,6 +167,20 @@ func New(opts Options) *Instance {
 	mux.HandleFunc("/", func(w http.ResponseWriter, rq *http.Request) {
 		http.Redirect(w, rq, "/ui", http.StatusFound)
 	})
+	// mock 影视详情页（方向B 测试：模拟 sandat 结构：video meta + playlist 容器 + 集数链接）。
+	// 不依赖真实站，验证 点结果→子窗口渲染→DetectVideoPage→Extract→显示集数 链路。
+	mux.HandleFunc("/mock", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		var b strings.Builder
+		b.WriteString(`<!DOCTYPE html><html><head><title>《真情在线观看》_mock</title>`)
+		b.WriteString(`<meta name="video:class" content="香港"><meta property="og:type" content="video"></head><body>`)
+		b.WriteString(`<div id="playlist1" class="tab-pane fade in active clearfix"><ul class="aa-content__playlist clearfix">`)
+		for i := 1; i <= 20; i++ {
+			fmt.Fprintf(&b, `<li><a href="/p/mock-1-%d.html" title="真情第%02d集">第%02d集</a></li>`, i, i, i)
+		}
+		b.WriteString(`</ul></div></body></html>`)
+		io.WriteString(w, b.String())
+	})
 	mux.Handle("/m/", ms.Handler())
 	mux.HandleFunc("/favicon.ico", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
@@ -218,6 +236,8 @@ func New(opts Options) *Instance {
 
 	// 盗版站闭环：播放页 URL → 拿流(m3u8/mp4) → 投屏。妈妈操作 2 的最后一段。
 	mux.HandleFunc("/api/cast", func(w http.ResponseWriter, rq *http.Request) {
+		// 注入页（站点域）跨域拿流：允许任意源（GET simple request，无需 preflight）
+		w.Header().Set("Access-Control-Allow-Origin", "*")
 		u := rq.URL.Query().Get("url")
 		title := rq.URL.Query().Get("title")
 		if u == "" {
@@ -311,7 +331,7 @@ func New(opts Options) *Instance {
 			return
 		}
 		if inst.PageRender != nil {
-			go inst.PageRender(u) // 子窗口渲染 → outerHTML POST /api/page/render
+			go inst.PageRender(u) // 子窗口渲染 → outerHTML POST /api/page/render（方向B）
 			writeJSON(w, map[string]any{"ok": true, "msg": "rendering"})
 			return
 		}
@@ -321,6 +341,21 @@ func New(opts Options) *Instance {
 			return
 		}
 		writeJSON(w, map[string]any{"ok": false, "msg": "WebView 渲染不可用"})
+	})
+
+	// inject-launch：方向C 可见 WebView 打开目标站 + 直接注入 JS（去广告/归一化/集数提取），不回传。
+	mux.HandleFunc("/api/page/inject-launch", func(w http.ResponseWriter, rq *http.Request) {
+		u := rq.URL.Query().Get("url")
+		if u == "" {
+			writeJSON(w, map[string]any{"ok": false, "msg": "缺少 url"})
+			return
+		}
+		if inst.PageInject != nil {
+			go inst.PageInject(u)
+			writeJSON(w, map[string]any{"ok": true, "msg": "injecting"})
+			return
+		}
+		writeJSON(w, map[string]any{"ok": false, "msg": "无壳注入"})
 	})
 
 	// render：子窗口 outerHTML 回传，原样存（不 Extract，保留页面结构）。
@@ -340,6 +375,16 @@ func New(opts Options) *Instance {
 		inst.pageMu.Lock()
 		inst.pageHTML = htmlText
 		inst.pageURL = u
+		// 方向B：判断影视页 + 提取集数（识别并套进去）。DetectVideoPage 三路启发式（不写死站点）。
+		ex := sniff.New(sniff.Default())
+		inst.pageIsVideo = ex.DetectVideoPage(u, htmlText)
+		inst.pageEps = nil
+		if inst.pageIsVideo {
+			clean := sniff.CleanAds(htmlText) // 去广告（归一化）
+			eps := ex.Extract(clean, u)       // 提取集数
+			sniff.SortEpisodes(eps)           // 排序归一化
+			inst.pageEps = eps
+		}
 		inst.pageMu.Unlock()
 		LogInfo("[page/render] 收到 outerHTML url=%s 大小=%d", u, len(htmlText))
 		writeJSON(w, map[string]any{"ok": true, "size": len(htmlText), "url": u})
@@ -350,14 +395,19 @@ func New(opts Options) *Instance {
 		inst.pageMu.Lock()
 		htmlText := inst.pageHTML
 		u := inst.pageURL
+		isVideo := inst.pageIsVideo
+		eps := inst.pageEps
 		inst.pageHTML = ""
 		inst.pageURL = ""
+		inst.pageIsVideo = false
+		inst.pageEps = nil
 		inst.pageMu.Unlock()
 		if htmlText == "" {
 			writeJSON(w, map[string]any{"ok": false, "rendering": true})
 			return
 		}
-		writeJSON(w, map[string]any{"ok": true, "url": u, "html": htmlText})
+		// 方向B：返回 is_video + 集数（识别则前端套进去，非影视则导航真实页）
+		writeJSON(w, map[string]any{"ok": true, "url": u, "is_video": isVideo, "episodes": eps})
 	})
 
 
@@ -630,6 +680,10 @@ func New(opts Options) *Instance {
 			lines = f
 		}
 		writeJSON(w, map[string]any{"ok": true, "logs": lines})
+	})
+	mux.HandleFunc("/api/logs/clear", func(w http.ResponseWriter, _ *http.Request) {
+		ClearLog() // 清空日志文件（旧实现只清前端 DOM，pollLogs 拉回 → 假清空）
+		writeJSON(w, map[string]any{"ok": true})
 	})
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, map[string]any{
