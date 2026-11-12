@@ -1084,23 +1084,14 @@ function rerunSearch(q) {
   searchSites();
 }
 
-// ── 资源搜索（bing/360/百度 聚合）──
-async function searchSites() {
-  // mock 阶段：searxng 聚合样式渲染到搜索页内（接真搜索后这里改回 fetch /api/search）
-  mockSearch();
-  return;
+// ── 方向E：搜索直接真跳搜索引擎（百度/360/Bing/搜狗 真结果页），不模板回显 ──
+function searchSites() {
   const q = document.getElementById('search-q').value.trim();
   if(!q) { toast('请输入关键词', false); return; }
-  const box = document.getElementById('search-res');
-  box.innerHTML = '<div class="dim">搜索中…（bing → 360 → 百度）</div>';
-  try {
-    const r = await fetch('/api/search?q='+encodeURIComponent(q));
-    const d = await r.json();
-    if(d.ok) { renderSearchRes(box, d.results||[]); toast('搜到 '+(d.results||[]).length+' 条'); return; }
-    // 库直接搜（WebView 渲染）：宿主未注入渲染器才 need_browser（正常宿主不出现）。
-    if(d.need_browser) { box.innerHTML = '<div class="warn">'+escapeHtml(d.msg||'WebView 渲染器未注入')+'</div>'; return; }
-    box.innerHTML = '<div class="warn">'+escapeHtml(d.msg||'搜索失败')+'</div>';
-  } catch(e) { box.innerHTML = '<div class="warn">网络错误: '+escapeHtml(e.message)+'</div>'; }
+  const eng = document.getElementById('search-engine').value;
+  const urls = { baidu:'https://www.baidu.com/s?wd=', bing:'https://www.bing.com/search?q=', so:'https://www.so.com/s?q=', sogou:'https://www.sogou.com/web?query=' };
+  const base = urls[eng] || urls.baidu;
+  window.location.href = base + encodeURIComponent(q); // 主窗口真跳搜索引擎
 }
 function escapeHtml(s){ return String(s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function renderSearchRes(box, rs) {

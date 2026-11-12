@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
 	"mycast/internal/server"
 )
 
@@ -132,26 +133,36 @@ func searchRenderPage(app *application.App, targetURL string) {
 	}()
 }
 
-// openInjectPage 用可见 WebView 打开目标站 + 直接注入 JS（去广告/归一化/集数提取）。
-// 不做子窗口回传、不用 node/curl：页面内 JS 直接清洗面板。
-// 注入用 WebviewWindowOptions.JS（页面加载自动注入，像 searchRenderPage 验证过的机制），
-// 不用 win.ExecJS（固定 sleep 后手动注入，页面加载中易静默失败）。
+// openInjectPage：主窗口原地跳转到目标站 + 页面加载后注入 JS 转化（不新开窗口）。
+// 站点只是内容源：屏蔽站点 body，替换成自家格式（标题+播放器+集数卡片），点集数嗅探拿流播。
 func openInjectPage(app *application.App, targetURL string) {
-	app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Title:            "注入测试",
-		Width:            1000,
-		Height:           800,
-		BackgroundColour: application.NewRGB(17, 17, 17),
-		URL:              targetURL,
-		JS:               injectJS, // 页面加载自动注入（wails3 在 DOM 就绪后执行）
-		Hidden:           false,     // 可见：用户能看真页 + 注入后集数面板
-	})
+	if mainWin == nil {
+		return
+	}
+	// 主窗口前端已 window.location.href 导航到站点（bootJS openInject 前端自身导航），
+	// 这里只负责站点页加载后注入 JS 转化（屏蔽站点 → 自家格式）。
+	go func() {
+		time.Sleep(10 * time.Second) // 等站点页加载（视频/集数 DOM 就绪）
+		mainWin.ExecJS(injectJS)     // 注入：屏蔽站点 → 自家格式
+	}()
 }
 
 // injectJS 方向C：JS 版去广告 + 归一化 + 集数提取 + 显示面板（对应 sniff.go 的 Go 逻辑）。
 // 页面内直接做：删广告节点/脚本/弹窗 → 提集数（第N集，排除上一/下一集）→ 排序归一化 → 浮层面板。
 const injectJS = `(function(){
   try{
+    // ── 百度包装去壳：link?url= → 真实影视站 URL（点结果直接跳影视站，绕过百度 302）──
+    document.querySelectorAll('a[href*="link?url="]').forEach(function(a){
+      var m = a.getAttribute('href')||'';
+      var u = m.match(/[?&]url=([^&]+)/);
+      if(u){ try{ a.setAttribute('href', decodeURIComponent(u[1])); }catch(e){} }
+    });
+    // ── DetectVideoPage 影视信号判断（非影视页：正常浏览，不动）──
+    var isVideo = /\/d\/|\/bofang\/|\/play\/|-\d+\.html|\/vod\/|\/videos\//.test(location.href);
+    if(!isVideo && document.querySelector('.aa-content__playlist, [class*="playlist"], [id*="playlist"], [class*="episode"]')) isVideo = true;
+    if(!isVideo && document.querySelector('meta[property="og:type"][content="video"], meta[name="video:class"]')) isVideo = true;
+    if(!isVideo && /第\s*\d+\s*[集期话]/.test(document.title)) isVideo = true;
+    if(!isVideo) return; // 非影视页（搜索引擎/普通页）：不处理，正常浏览
     // ── 提取集数（页面内 JS，非 HTTP）──
     var eps=[],seen={};
     document.querySelectorAll('a').forEach(function(a){
@@ -197,6 +208,9 @@ const injectJS = `(function(){
   }catch(e){console.log('[mc-inject] 错误: '+e.message);}
 })();`
 
+// 主窗口（/ui 主界面）全局引用：注入/原地跳转用，避免 GetAll 顺序拿到子窗口。
+var mainWin *application.WebviewWindow
+
 func main() {
 
 	// 后端监听端口（HC_PORT 覆盖）——server.Options.Port 也要传，
@@ -231,12 +245,12 @@ func main() {
 	window.hc = {
 	  sniffRender: function(url){ fetch('/api/sniff/render-launch?url='+encodeURIComponent(url)); },
 	  pageRender: function(url){ fetch('/api/page/render-launch?url='+encodeURIComponent(url)); },
-	  openInject: function(url){ fetch('/api/page/inject-launch?url='+encodeURIComponent(url)); },
+	  openInject: function(url){ window.location.href = url; },
 	  searchRender: function(url){ fetch('/api/search/render-launch?url='+encodeURIComponent(url)); },
 	  searchEngine: function(engine, url){ window.__se_engine=engine; fetch('/api/search/render-launch?url='+encodeURIComponent(url)); }
 	};`
 
-	app.Window.NewWithOptions(application.WebviewWindowOptions{
+	mainWin = app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:            "MyCast 家庭影院",
 		Width:            1280,
 		Height:           800,
@@ -245,6 +259,10 @@ func main() {
 		BackgroundColour: application.NewRGB(17, 17, 17),
 		URL:              "http://127.0.0.1:" + port + "/ui",
 		JS:               bootJS,
+	})
+	// 方向E：主窗口每次页面加载完成注入判断 JS（影视页→清洗归一化；非影视不动）。
+	mainWin.OnWindowEvent(events.Linux.WindowLoadFinished, func(e *application.WindowEvent) {
+		mainWin.ExecJS(injectJS)
 	})
 
 	// 注册渲染兜底：后端 /api/sniff/render-launch 触发开子窗口。
