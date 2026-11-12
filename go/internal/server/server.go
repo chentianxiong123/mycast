@@ -64,6 +64,8 @@ type Instance struct {
 	PageRender func(url string)
 	// PageInject 方向C：可见 WebView 打开目标站 + 直接注入 JS（去广告/归一化/集数提取），不回传。
 	PageInject func(url string)
+	// Nav 主窗口导航（Go 侧 mainWin.SetURL，跨域 location.href 不生效，必须走 Go）。
+	Nav func(url string)
 	// SearchWebviewRender 搜索渲染（Hidden 子 WebView 窗口渲染引擎页，JS 抓结构化结果 → 导航回传）。
 	// 桌面 wails3 壳注入；nil=HTTP 后备（Android 无窗口时）。
 	SearchWebviewRender func(url string)
@@ -320,6 +322,21 @@ func New(opts Options) *Instance {
 		inst.sniffURL = ""
 		inst.sniffMu.Unlock()
 		writeJSON(w, map[string]any{"ok": true, "url": u, "episodes": eps})
+	})
+
+	// ═══════════ 主窗口导航（方向E：真跳搜索引擎/影视站，Go 侧 SetURL）═══
+	mux.HandleFunc("/api/nav", func(w http.ResponseWriter, rq *http.Request) {
+		u := rq.URL.Query().Get("url")
+		if u == "" {
+			writeJSON(w, map[string]any{"ok": false, "msg": "缺少 url"})
+			return
+		}
+		if inst.Nav != nil {
+			inst.Nav(u) // Go 侧 mainWin.SetURL（跨域 location.href 不生效，必须走 Go）
+			writeJSON(w, map[string]any{"ok": true})
+			return
+		}
+		writeJSON(w, map[string]any{"ok": false, "msg": "无壳导航"})
 	})
 
 	// ═══════════ 纯页面渲染通道（先不归一化/不去广告，直接渲染搜索结果真实页面）═══

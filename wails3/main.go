@@ -151,6 +151,10 @@ func openInjectPage(app *application.App, targetURL string) {
 // 页面内直接做：删广告节点/脚本/弹窗 → 提集数（第N集，排除上一/下一集）→ 排序归一化 → 浮层面板。
 const injectJS = `(function(){
   try{
+    // ── target=_blank 转 _self（百度/搜索结果默认新标签，wails3 未连 create 信号 → 点击没反应）──
+    var fixTarget = function(){ document.querySelectorAll('a[target="_blank"]').forEach(function(a){ a.removeAttribute('target'); }); };
+    fixTarget();
+    new MutationObserver(fixTarget).observe(document, {childList:true, subtree:true});
     // ── 百度包装去壳：link?url= → 真实影视站 URL（点结果直接跳影视站，绕过百度 302）──
     document.querySelectorAll('a[href*="link?url="]').forEach(function(a){
       var m = a.getAttribute('href')||'';
@@ -285,6 +289,13 @@ func main() {
 		searchRenderPage(app, targetURL)
 	}
 	log.Printf("[main] SearchWebviewRender 已注入 (wails3 壳)")
+	// 方向E：主窗口导航（Go 侧 SetURL，跨域 location.href 不生效）。
+	inst.Nav = func(targetURL string) {
+		log.Printf("[main] Nav 主窗口跳转: %s", targetURL)
+		if mainWin != nil {
+			mainWin.SetURL(targetURL)
+		}
+	}
 
 	if err := app.Run(); err != nil {
 		os.Exit(1)

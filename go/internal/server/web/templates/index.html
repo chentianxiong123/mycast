@@ -1091,7 +1091,8 @@ function searchSites() {
   const eng = document.getElementById('search-engine').value;
   const urls = { baidu:'https://www.baidu.com/s?wd=', bing:'https://www.bing.com/search?q=', so:'https://www.so.com/s?q=', sogou:'https://www.sogou.com/web?query=' };
   const base = urls[eng] || urls.baidu;
-  window.location.href = base + encodeURIComponent(q); // 主窗口真跳搜索引擎
+  // Go 侧 mainWin.SetURL 导航（跨域 location.href 不生效，必须走 Go）
+  fetch('/api/nav?url='+encodeURIComponent(base + encodeURIComponent(q))).catch(()=>{});
 }
 function escapeHtml(s){ return String(s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function renderSearchRes(box, rs) {
@@ -1104,8 +1105,8 @@ function renderSearchRes(box, rs) {
   ).join('')+'</div>';
 }
 function pickSite(u, title) {
-  // 用户要求：点击搜索结果 → 直接渲染那个真实页面（先不归一化、不去广告）
-  renderRealPage(u, title);
+  // 方向E：点搜索结果 → 主窗口跳那个真实页（Go 侧 SetURL，跨域能跳）
+  fetch('/api/nav?url='+encodeURIComponent(u)).catch(()=>{});
 }
 
 // ── 真实页面渲染（方向B）：子窗口渲染 → 后端判断影视页 → 套进去（显示集数）/ 导航真实页 ──
