@@ -19,6 +19,8 @@ import (
 
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/charset"
+
+	"mycast/internal/jsexec"
 )
 
 // Episode 一集：集数 + 标题 + 播放页链接。
@@ -39,6 +41,13 @@ type Config struct {
 	ContainerMarkers []string
 	// 集数文本特征（兜底：命中才收，对齐 '集'）
 	TextHint string
+
+	// EnableJS 启用 L2 层：纯 HTTP 拿不到流地址时，用嵌入式 JS 引擎执行页面混淆
+	// 脚本取地址。这是替代旧 WebView 渲染路径的关键——执行取流那段 JS 不需要
+	// DOM 渲染 / GPU / WebKitGTK。
+	EnableJS bool
+	// JSEngine 引擎配置（EnableJS=true 时生效；UA 默认取 Config.UA，HTTP 用本提取器的 client）
+	JSEngine jsexec.Config
 }
 
 // Default 默认配置（覆盖苹果CMS/momovod 系常见盗版站 + /cid/ 变体）。
@@ -198,7 +207,37 @@ func (e *Extractor) ResolveStream(playURL string) (streamURL, mime string, err e
 			}
 		}
 	}
+	// 6. L2 层：嵌入式 JS 引擎执行页面混淆脚本，观测流地址（替代旧 WebView 路径）。
+	// 纯 HTTP + 正则拿不到时才启用——真实站点大量用混淆 JS 动态算 URL。
+	if e.cfg.EnableJS {
+		if s, mime, err := e.resolveStreamJS(htmlText, playURL); err == nil {
+			return s, mime, nil
+		}
+	}
 	return "", "", errors.New("播放页未找到流地址（m3u8/mp4）")
+}
+
+// resolveStreamJS L2 层：用嵌入式 JS 引擎跑页面脚本取流地址。
+// 与旧路径的区别：旧路径用 WebView 渲染整页再拿 outerHTML 解析；这里只执行取流那
+// 段 JS，不需要 DOM 渲染 / GPU / WebKitGTK，因此不再有改 UA、target=_blank、
+// 注入时机、裸壳白屏那串死结。
+func (e *Extractor) resolveStreamJS(htmlText, playURL string) (string, string, error) {
+	cfg := e.cfg.JSEngine
+	cfg.BaseURL = playURL
+	if cfg.UA == "" {
+		cfg.UA = e.cfg.UA
+	}
+	cfg.HTTP = e.hc
+	eng, err := jsexec.New(cfg)
+	if err != nil {
+		return "", "", err
+	}
+	defer eng.Close()
+	res := eng.ExecPage(htmlText, playURL)
+	if len(res.Hits) == 0 {
+		return "", "", errors.New("JS 引擎未捕获到流地址")
+	}
+	return res.Hits[0].URL, guessMime(res.Hits[0].URL), nil
 }
 
 func resolveRel(base *url.URL, ref string) string {

@@ -9,6 +9,11 @@ require (
 )
 
 require (
+	github.com/go-quickjs/go-intl v0.9.0 // indirect
+	github.com/go-quickjs/go-quickjs v0.43.0 // indirect
+)
+
+require (
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/google/jsonschema-go v0.4.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
@@ -26,4 +31,3 @@ require (
 	modernc.org/memory v1.12.1 // indirect
 	modernc.org/sqlite v1.62.0
 )
-
