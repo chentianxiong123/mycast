@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	utls "github.com/refraction-networking/utls"
+
+	impersonate "github.com/North-web-dev/impersonate-http"
 )
 
 // TestJA3Fingerprint 离线计算 ClientHello 的 JA3，验证 TLS 指纹伪装成 Chrome。
@@ -18,7 +20,7 @@ func TestJA3Fingerprint(t *testing.T) {
 	defer c1.Close()
 	defer c2.Close()
 
-	uconn := utls.UClient(c1, &utls.Config{ServerName: "www.baidu.com"}, utls.HelloChrome_Auto)
+	uconn := utls.UClient(c1, &utls.Config{ServerName: "www.baidu.com"}, impersonate.ChromeAndroid.ClientHello)
 	if err := uconn.BuildHandshakeState(); err != nil {
 		t.Fatal(err)
 	}
@@ -131,4 +133,45 @@ func computeJA3(raw []byte) string {
 func isGreased(v uint16) bool {
 	// greased: 高字节=低字节=0x0a
 	return v&0x0f0f == 0x0a0a
+}
+
+// TestAkamaiH2Fingerprint 验证 impersonate 的 ChromeAndroid Profile 的 Akamai HTTP/2 指纹
+// 与 Chrome 真实指纹 byte-exact 一致（SETTINGS + WINDOW_UPDATE + 伪头顺序）。
+// Chrome 参考（proxymint/curl-impersonate 实测）：1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p
+func TestAkamaiH2Fingerprint(t *testing.T) {
+	p := impersonate.ChromeAndroid
+
+	// SETTINGS：按 profile 里的顺序拼（顺序本身是指纹一部分）
+	var settings []string
+	for _, s := range p.H2Settings {
+		settings = append(settings, fmt.Sprintf("%d:%d", s.ID, s.Val))
+	}
+	gotSettings := strings.Join(settings, ";")
+
+	// 伪头顺序
+	var pseudo []string
+	for _, c := range p.H2PseudoOrder {
+		pseudo = append(pseudo, c)
+	}
+	gotPseudo := strings.Join(pseudo, ",")
+
+	// 拼 Akamai 标准串
+	got := fmt.Sprintf("%s|%d|0|%s", gotSettings, p.H2ConnWindow, gotPseudo)
+	want := "1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p"
+
+	t.Logf("Akamai 实际: %s", got)
+	if got != want {
+		t.Errorf("Akamai HTTP/2 指纹不匹配 Chrome\n  期望: %s\n  实际: %s", want, got)
+	}
+	// Firefox 对照：应明显不同（证明不是随便塞的）
+	pf := impersonate.Firefox
+	var sf []string
+	for _, s := range pf.H2Settings {
+		sf = append(sf, fmt.Sprintf("%d:%d", s.ID, s.Val))
+	}
+	pfStr := fmt.Sprintf("%s|%d|0|%s", strings.Join(sf, ";"), pf.H2ConnWindow, strings.Join(pf.H2PseudoOrder, ","))
+	if pfStr == got {
+		t.Errorf("Firefox 与 Chrome 指纹相同，异常: %s", pfStr)
+	}
+	t.Logf("Firefox 对照: %s（不同=正常）", pfStr)
 }

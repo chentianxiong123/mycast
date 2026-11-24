@@ -10,12 +10,11 @@
 package httptool
 
 import (
-	"context"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
 	"math/rand"
-	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -26,7 +25,7 @@ import (
 	"sync"
 	"time"
 
-	utls "github.com/refraction-networking/utls"
+	impersonate "github.com/North-web-dev/impersonate-http"
 )
 
 // DefaultUA 移动端 Chrome UA（与 sniff.Config.UA 默认值一致，保持全局统一）。
@@ -77,15 +76,15 @@ func New(cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("httptool: cookiejar: %w", err)
 	}
 
-	tr := &http.Transport{
-		// 连接复用是"像真人"的重要一环：真实浏览器复用 TCP/TLS 连接。
-		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 20,
-		IdleConnTimeout:     90 * time.Second,
-		// TLS 指纹伪装成 Chrome（JA3）。风控判据是会话指纹，Go 默认 crypto/tls 的
-		// 握手指纹和 Chrome 完全不同，裸 client 一握手就被识别为"Go 爬虫"。
-		ForceAttemptHTTP2: true, // DialTLSContext 自定义时默认不启用 h2，必须显式开
-		DialTLSContext:    dialTLSChrome(cfg.TLSInsecure),
+	// https 走 impersonate（byte-exact Chrome 指纹：JA3/JA4 + Akamai HTTP/2）；
+	// http 明文站走默认 transport（impersonate 强制 TLS，明文站会握手失败）。
+	tr := &switchRT{
+		https: impersonate.NewTransport(impersonate.ChromeAndroid),
+		http: &http.Transport{
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 20,
+			IdleConnTimeout:     90 * time.Second,
+		},
 	}
 	c := &Client{
 		cfg: cfg,
@@ -160,7 +159,15 @@ func (c *Client) Get(rawURL string) (string, error) {
 	if resp.StatusCode != http.StatusOK {
 		return "", &HTTPError{Code: resp.StatusCode}
 	}
-	b, err := io.ReadAll(io.LimitReader(resp.Body, c.cfg.MaxBytes))
+	// 自定义 transport 不保证自动解压，显式处理 gzip
+	var rdr io.Reader = resp.Body
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		if gz, gerr := gzip.NewReader(resp.Body); gerr == nil {
+			defer gz.Close()
+			rdr = gz
+		}
+	}
+	b, err := io.ReadAll(io.LimitReader(rdr, c.cfg.MaxBytes))
 	if err != nil {
 		return "", err
 	}
@@ -288,31 +295,6 @@ func (c *Client) LoadCookies() {
 	}
 }
 
-// dialTLSChrome 返回一个伪装成 Chrome 的 TLS 拨号器（utls HelloChrome_Auto）。
-// 这是"过风控"的关键一环：百度/360 的 WAF 通过 TLS/JA3 指纹区分真人和爬虫，
-// Go 默认 crypto/tls 指纹固定且不像任何浏览器，必须用 utls 伪装成 Chrome。
-func dialTLSChrome(insecure bool) func(context.Context, string, string) (net.Conn, error) {
-	return func(ctx context.Context, network, addr string) (net.Conn, error) {
-		host, _, err := net.SplitHostPort(addr)
-		if err != nil {
-			return nil, err
-		}
-		raw, err := (&net.Dialer{}).DialContext(ctx, network, addr)
-		if err != nil {
-			return nil, err
-		}
-		uconn := utls.UClient(raw, &utls.Config{
-			ServerName:         host,
-			InsecureSkipVerify: insecure,
-		}, utls.HelloChrome_Auto)
-		if err := uconn.HandshakeContext(ctx); err != nil {
-			raw.Close()
-			return nil, err
-		}
-		return uconn, nil
-	}
-}
-
 // SeedCookies 把 "a=1; b=2" 形式的 Cookie 头解析后种进 jar（账号固化 cookie 统一入口）。
 // 与 CookieJar 自动捕获的会话 cookie 合并管理，避免 CookieFn 手动 Set("Cookie")
 // 覆盖 jar 导致丢 cookie。固化 cookie 同名时优先（SetCookies 按 name 覆盖）。
@@ -335,6 +317,20 @@ func (c *Client) SeedCookies(rawURL, cookieHeader string) {
 		}
 		c.jar.SetCookies(u, []*http.Cookie{{Name: strings.TrimSpace(kv[0]), Value: strings.TrimSpace(kv[1])}})
 	}
+}
+
+// switchRT 按 scheme 分流：https 走 impersonate（浏览器指纹），http 走默认 transport。
+// 原因：impersonate 强制 TLS 握手，http:// 明文站会报 "first record does not look like a TLS handshake"。
+type switchRT struct {
+	https http.RoundTripper
+	http  http.RoundTripper
+}
+
+func (s *switchRT) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.URL != nil && req.URL.Scheme == "https" {
+		return s.https.RoundTrip(req)
+	}
+	return s.http.RoundTrip(req)
 }
 
 // HTTPError HTTP 状态码错误。
