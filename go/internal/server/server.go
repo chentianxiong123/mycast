@@ -51,14 +51,18 @@ type Instance struct {
 	sniffResult []sniff.Episode
 	sniffURL    string
 
-	// 纯页面渲染通道：点击搜索结果 → 子 WebView 渲染真实页 → outerHTML 存这，前端直接显示（不归一化/不去广告）
+	// 纯页面渲染通道（L3）：点击搜索结果 → 子 WebView 渲染真实页 → outerHTML 存这，
+	// 前端直接显示（不归一化/不去广告）
 	pageMu       sync.Mutex
 	pageHTML     string
 	pageURL      string
 	pageIsVideo  bool            // 方向B：DetectVideoPage 判断（点结果→识别影视页）
 	pageEps      []sniff.Episode // 方向B：提取的集数（识别并套进去）
 
-	// WebviewRender 宿主注入（sniff 兜底：渲染盗版站详情页，回传 outerHTML）。
+	// WebviewRender 宿主注入（sniff L3 兜底：渲染盗版站详情页，回传 outerHTML）。
+	// 降级链：L0 纯 HTTP+正则 → L1 NeedsBrowser 特征 → L2 嵌入式 JS 引擎（jsexec）
+	// → L3 WebView 兜底（下面这组）。L2 已经能解 JS 混淆取流，所以这组只剩
+	// 真·DOM 渲染 / canvas·WebGL 指纹站才会走到。
 	WebviewRender func(url string)
 	// PageRender 纯页面渲染（点击搜索结果 → 渲染真实页，回传 outerHTML，不归一化/不去广告）。
 	PageRender func(url string)

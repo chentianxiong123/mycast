@@ -1,10 +1,12 @@
 # mycast — DLNA 投屏中继（手机当中间件）
 
-> **⛔ 项目已冻结归档（2026-11-12）**
+> **🔄 项目已重启（2026-11-24，分支 `restart/http-first-jsengine`）**
 >
-> 桌面套皮浏览器方向（方向 E）撞上 wails3 / WebKitGTK 的硬限制（改 UA 要 fork、target=_blank 没连 create 信号、跨域导航 SetURL 后注入丢失、裸壳白屏），用户决定收手。
+> 2026-11-12 冻结的根因是桌面「套皮浏览器」方向撞死在 wails3 / WebKitGTK 上。**复盘发现那 5 条死结一条都不在投屏核心价值链上**——它们是附加体验的代价。
 >
-> **能用的资产**（DLNA 投屏 / B站解析 / 集数提取 / 影视页检测 / Android 壳）全部保留可复用，死结清单见 [`docs/2026-11-12-项目归档-冻结-资产与死结全记录.md`](docs/2026-11-12-项目归档-冻结-资产与死结全记录.md)。哪天重启从那份文档 §4 挑路线接着走。
+> **重启的关键认知：执行取流那段 JS 只需要一个 JS 引擎，不需要 DOM 渲染 / GPU / WebKitGTK。** 以前把「执行 JS」和「渲染页面」绑在 WebView 上，才撞出那串死结。现在拆开：引入嵌入式 JS 引擎（`go-quickjs`，纯 Go 零 CGo），**WebView 从「必需」退到「兜底」**。
+>
+> 详细选型与踩坑：[`docs/2026-11-24-项目重启-HTTP-first与JS引擎降级链.md`](docs/2026-11-24-项目重启-HTTP-first与JS引擎降级链.md)
 
 把「App 投屏 → 电视」这条经常「越播越慢 / 播不了」的链路，改成手机当中间件：
 
@@ -35,15 +37,44 @@ App(B站/百度/抖音/盗版站) ──SSDP发现/SOAP/NVA──> mycast(手机
 | 山寨/网页客户端发畸形 SOAP（未转义 `&`） | SOAP 解析容错 + 正则兜底 |
 | 源流 PTS 漂移 / 时间戳错 → 慢动作 | remux：ffmpeg `-c copy` 重封装成 MPEG-TS |
 
+## 取流降级链（本次重启的核心结构）
+
+以前遇到 JS 混淆的站点就 `return ErrNeedsBrowser` 甩给 WebView 渲染。现在拆成 4 层，WebView 只在最后一层：
+
+```
+L0  纯 HTTP + 正则      sniff.ResolveStream 的 5 级（绝对 m3u8 → 绝对 mp4 →
+                               player 配置 → 混淆 base64 变体 → iframe 子页）
+L1  静态特征判定        sniff.NeedsBrowser（JS 挑战 / 指纹守卫特征）
+L2  嵌入式 JS 引擎      执行页面混淆脚本 + 行为观测（hook video.src / fetch / XHR）
+L3  WebView 兜底        仅剩真·DOM 渲染 / canvas·WebGL 指纹站
+```
+
+**L2 是本次重启的增量**，覆盖范围（影视站嗅探 → 拿流 → 投屏场景）：
+
+| 场景 | L2 能否解 |
+|---|---|
+| 字符串混淆 / 数组映射 / 十六进制 → 真实 m3u8 | ✅ 最常见 |
+| JS 挑战算 cookie（`acw_tc` / `__jsluid` / 瑞数 / 创宇盾） | ✅ |
+| 动态签名（token / md5 / timestamp） | ✅ |
+| 依赖 `document` / `window` / `navigator` | ⚠️ 已注入最小 DOM stub |
+| canvas / WebGL / TLS 指纹检测 | ❌ 只有真浏览器 → L3 |
+
+L2 用**行为观测**而非「还原混淆」：不分析站点怎么算出 URL，而是 hook 住 URL 最终被写到哪（`video.src` setter / `setAttribute` / `fetch` / `XHR.open` / `location.assign`）。**站点无关**，所以不用为每个站写规则。
+
 ## 目录结构
 
 ```
 mycast/
 ├── go/                  # 业务核心（server.New() 全量 handler，可被壳复用）
 │   ├── cmd/mycast/     # 独立进程入口
-│   └── internal/        # ssdp / renderer / nva / upnp / bili / media / tv / relay / server
+│   └── internal/
+│       ├── jsexec/     # ★ 新增：嵌入式 JS 引擎层（L2，观测型嗅探 + 安全围栏）
+│       ├── httptool/   # ★ 新增：CookieJar + 按域持久化 + 抗野请求封控节流
+│       ├── ssdp/ renderer/ nva/ upnp/ bili/ media/ medialib/
+│       ├── tv/ relay/ sniff/ search/ server/ mcp/
 ├── android/             # 自写原生 WebView 壳（零 Gradle，纯 aapt2 打包）
-├── archive/wails3/      # 已弃用的 wails3 壳（归档保留，不再维护）
+├── wails3/              # 桌面壳（L3 WebView 兜底通道，不再做套皮浏览器）
+├── archive/wails3/      # 已弃用的旧 wails3 壳（归档保留，不再维护）
 ├── docs/                # 技术分析与排查记录
 └── README.md
 ```
@@ -65,6 +96,14 @@ go build -o mycast ./cmd/mycast && ./mycast
 cd go && go build -o mycast ./cmd/mycast && ./mycast
 ```
 
+### 交叉编译（零 CGo）
+`jsexec` 依赖的 `go-quickjs` 是纯 Go（QuickJS-NG 重写），所以整条链路 **CGO_ENABLED=0** 可编译，linux 目标是纯静态链接：
+
+```bash
+CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build ./cmd/mycast   # 手机
+CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build ./cmd/mycast   # 盒子/桌面
+```
+
 ### 环境变量
 | 变量 | 默认 | 说明 |
 |---|---|---|
@@ -82,14 +121,14 @@ cd android
 ./build-apk.sh            # 纯 aapt2 打包，双 ABI
 ```
 
-> wails3 壳已弃用（setURL no-op / 绑定限制 / 混合内容限制），归档在 `archive/wails3/`。
+> 桌面壳（`wails3/`）不再承担「套皮浏览器」职责，只做 L3 兜底通道。
 
 安卓已适配：
 - `MainActivity.acquireMulticastLock()`：Android 默认丢多播包，SSDP 发现电视必须拿 `WifiManager.MulticastLock`
 - 权限：`INTERNET` + `CHANGE_WIFI_MULTICAST_STATE` + `ACCESS_WIFI_STATE`
 - `usesCleartextTraffic="true"`：WebView 走 127.0.0.1，电视走局域网 IP 拉 /m/ 流
 - 安卓端后端绑 `0.0.0.0`（电视要能拉到本机媒体流）
-- JS 桥 `window.hc.sniffRender(url)` + `window.hc.renderDone(html,url)`：JS 反爬站 WebView 兜底
+- JS 桥 `window.hc.sniffRender(url)` + `window.hc.renderDone(html,url)`：L3 渲染回传
 
 细节见 `android/` 源码。
 
@@ -128,15 +167,21 @@ cd go && go test ./...
 - `TestRelayEndToEnd`：模拟 App SetAVTransportURI → 中间件 → 模拟电视收到本地 URL + Play
 - `TestGenericHLSFromAnySource`：7 种任意来源 HLS（无后缀/带query/fMP4/AES/master/绝对路径）
 - `TestPirateSiteRefererPassthrough`：盗版站防盗链 Referer 透传端到端
-- `TestParseSoapRobust`：畸形 SOAP（未转义 &）容错
+- `TestParseSoapRobust`：畸形 SOAP（未转义 `&`）容错
 - `TestRemuxProducesTS`：真实 mp4 → ffmpeg 重封装 → 有效 MPEG-TS（0x47 开头）
+- **`TestExecPageConfusedVideoSrc`**（新增）：base64 数组 + eval + `video.src` + `setAttribute` 双写入点，L2 观测型捕获
+- **`TestExecPageFetchStub`**（新增）：引擎内 fetch → Go http.Client → 解析 m3u8 取分片
+- **`TestExecPageSecurityFence`**（新增）：不可信脚本的死循环被 context 超时打断，而不是挂死进程
+- **`TestResolveStreamL2JSEngine`**（新增）：L2 集成——源码里不存在完整 URL 字面量，只有 base64 片段，L0 正则全落空、L2 取出真实地址
 
 ## 文档
 见 `docs/`：
+- `2026-11-24-项目重启-HTTP-first与JS引擎降级链.md` — ★ 本次重启的选型、踩坑、验证
+- `2026-11-12-项目归档-冻结-资产与死结全记录.md` — 冻结时的资产与死结清单（历史）
 - `2026-10-29-DLNA投屏HLS全404排查修复.md` — HLS 分片 404 根因与修复
 - `2026-10-29-手机CPU转码能力实测评估.md` — 手机转码能撑多少码率（实测+估算）
 
 ## 说明
-- 纯 Go 标准库 + goupnp（控制电视）；交叉编译到 Android/arm64 通过
+- 纯 Go 标准库 + goupnp（控制电视）+ go-quickjs（JS 引擎）；**全部零 CGo**，交叉编译到 Android/arm64 通过
 - proxy 模式是默认，零依赖零 CPU（字节搬运）；remux 需 ffmpeg（可选）
 - 数据不经过手机解码/转码路径 → 手机只是字节搬运，CPU 占用≈0

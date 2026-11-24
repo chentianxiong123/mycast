@@ -524,7 +524,7 @@ func firstNonEmpty(vals ...string) string {
 }
 
 // NeedsBrowser 检测页面是否需要浏览器内核（JS 挑战/指纹反爬）。
-// 纯 HTTP 拿不到真实内容，需要 WebView 兜底。
+// 纯 HTTP 拿不到真实内容时先走 L2（嵌入式 JS 引擎），仍不行才需要 L3 WebView 兜底。
 func NeedsBrowser(htmlText string) bool {
 	low := strings.ToLower(htmlText)
 	// 常见 JS 挑战/指纹守卫特征
@@ -616,7 +616,9 @@ func inPlaylistContainer(a *html.Node, markers []string) bool {
 }
 
 // ErrNeedsBrowser 页面需要浏览器内核（JS 挑战/指纹反爬），纯 HTTP 拿不到。
-var ErrNeedsBrowser = errors.New("页面需要浏览器内核（JS 反爬挑战），请用 WebView 打开")
+// ErrNeedsBrowser 页面需要浏览器内核（JS 挑战/指纹反爬）。
+// L2（嵌入式 JS 引擎）也拿不到时才抛这个错 → 落到 L3 WebView 兜底。
+var ErrNeedsBrowser = errors.New("页面需要浏览器内核（JS 反爬挑战），L0/L2 均未命中，请走 L3 WebView 兜底")
 
 // ExtractURL 一步到位：拉取详情页 → 提取集数。
 func (e *Extractor) ExtractURL(rawURL string) ([]Episode, error) {
