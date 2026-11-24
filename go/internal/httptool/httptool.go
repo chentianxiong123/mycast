@@ -10,11 +10,12 @@
 package httptool
 
 import (
-	"crypto/tls"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"math/rand"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -24,6 +25,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	utls "github.com/refraction-networking/utls"
 )
 
 // DefaultUA 移动端 Chrome UA（与 sniff.Config.UA 默认值一致，保持全局统一）。
@@ -78,8 +81,10 @@ func New(cfg Config) (*Client, error) {
 		MaxIdleConns:        100,
 		MaxIdleConnsPerHost: 20,
 		IdleConnTimeout:     90 * time.Second,
-		TLSClientConfig:     &tls.Config{InsecureSkipVerify: cfg.TLSInsecure},
-		// 显式 HTTP/2 由 Go 自动协商（ALPN）；此处不强制降级。
+		// TLS 指纹伪装成 Chrome（JA3）。风控判据是会话指纹，Go 默认 crypto/tls 的
+		// 握手指纹和 Chrome 完全不同，裸 client 一握手就被识别为"Go 爬虫"。
+		ForceAttemptHTTP2: true, // DialTLSContext 自定义时默认不启用 h2，必须显式开
+		DialTLSContext:    dialTLSChrome(cfg.TLSInsecure),
 	}
 	c := &Client{
 		cfg: cfg,
@@ -270,6 +275,31 @@ func (c *Client) LoadCookies() {
 			})
 		}
 		c.jar.SetCookies(u, cks)
+	}
+}
+
+// dialTLSChrome 返回一个伪装成 Chrome 的 TLS 拨号器（utls HelloChrome_Auto）。
+// 这是"过风控"的关键一环：百度/360 的 WAF 通过 TLS/JA3 指纹区分真人和爬虫，
+// Go 默认 crypto/tls 指纹固定且不像任何浏览器，必须用 utls 伪装成 Chrome。
+func dialTLSChrome(insecure bool) func(context.Context, string, string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		raw, err := (&net.Dialer{}).DialContext(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		uconn := utls.UClient(raw, &utls.Config{
+			ServerName:         host,
+			InsecureSkipVerify: insecure,
+		}, utls.HelloChrome_Auto)
+		if err := uconn.HandshakeContext(ctx); err != nil {
+			raw.Close()
+			return nil, err
+		}
+		return uconn, nil
 	}
 }
 
