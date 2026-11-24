@@ -25,12 +25,14 @@ import (
 	"sync"
 	"time"
 
+	"mycast/internal/httptool"
+
 	xhtml "golang.org/x/net/html"
 )
 
 // Result 一条搜索结果。
 type Result struct {
-	Engine  string `json:"engine"`           // bing / so / baidu
+	Engine  string `json:"engine"` // bing / so / baidu
 	Title   string `json:"title"`
 	URL     string `json:"url"`
 	Content string `json:"content,omitempty"`
@@ -41,6 +43,12 @@ type Config struct {
 	UA      string        // 请求 User-Agent（手机 Safari，更接近真实用户）
 	Timeout time.Duration // 单请求超时
 	Delay   time.Duration // 引擎间退避（验证码/失败时等待）
+
+	// CookieDir Cookie 持久化目录（账号固化 cookies/<host>.json）。
+	// 搜索引擎风控的关键判据是会话态：真实登录态 cookie 能大幅降低被拦概率。
+	CookieDir string
+	// ThrottleDelay 请求间隔基础值（随机抖动避开野请求特征）；0=不节流
+	ThrottleDelay time.Duration
 }
 
 // Default 默认配置：桌面 Chrome UA + 8s 超时 + 3s 引擎间退避。
@@ -55,7 +63,7 @@ func Default() Config {
 // Aggregator 聚合搜索器：按序试引擎，遇验证码/空结果自动 fallback。
 type Aggregator struct {
 	cfg Config
-	hc  *http.Client
+	hc  *httptool.Client
 
 	// CookieFn 持久化 cookie 提供者（账号固化 cookies/<engine>.json）。
 	// 最稳的方式：带真实登录态 cookie 纯 HTTP 请求（像真人），WebView 仅兜底。
@@ -81,9 +89,20 @@ func New(cfg Config) *Aggregator {
 	if cfg.Delay == 0 {
 		cfg.Delay = Default().Delay
 	}
+	hc, err := httptool.New(httptool.Config{
+		UA:        cfg.UA,
+		Timeout:   cfg.Timeout,
+		Delay:     cfg.ThrottleDelay,
+		Jitter:    0.5,
+		CookieDir: cfg.CookieDir,
+	})
+	if err != nil {
+		// cookiejar.New(nil) 实际不会失败；防御性处理，避免 Aggregator 为 nil
+		panic("search: httptool.New: " + err.Error())
+	}
 	return &Aggregator{
 		cfg: cfg,
-		hc:  &http.Client{Timeout: cfg.Timeout},
+		hc:  hc,
 	}
 }
 
@@ -591,9 +610,10 @@ func readBody(resp *http.Response) string {
 // 搜索引擎（百度移动版等）纯 HTTP 拿空壳，WebView JS 渲染后出真结果；
 // 这里复用三引擎各自的解析逻辑，按来源引擎分派。
 // 参数：
-//   htmlText: WebView 回传的 outerHTML
-//   pageURL:  渲染的页面 URL（判断引擎）
-//   engine:   已判定的引擎（bing/so/baidu/webview）
+//
+//	htmlText: WebView 回传的 outerHTML
+//	pageURL:  渲染的页面 URL（判断引擎）
+//	engine:   已判定的引擎（bing/so/baidu/webview）
 func (a *Aggregator) ParseRendered(htmlText, pageURL, engine string) []Result {
 	if strings.TrimSpace(htmlText) == "" {
 		return nil
@@ -768,7 +788,11 @@ func (a *Aggregator) searchSogou(ctx context.Context, query string) ([]Result, e
 		var href, title string
 		walkNodes(n, func(m *xhtml.Node) {
 			if m.Type == xhtml.ElementNode && m.Data == "a" && href == "" {
-				for _, at := range m.Attr { if at.Key == "href" { href = at.Val } }
+				for _, at := range m.Attr {
+					if at.Key == "href" {
+						href = at.Val
+					}
+				}
 				title = textOf(m)
 			}
 		})
@@ -790,7 +814,11 @@ func (a *Aggregator) searchSogou(ctx context.Context, query string) ([]Result, e
 			var href, title string
 			walkNodes(n, func(m *xhtml.Node) {
 				if m.Type == xhtml.ElementNode && m.Data == "a" && href == "" {
-					for _, at := range m.Attr { if at.Key == "href" { href = at.Val } }
+					for _, at := range m.Attr {
+						if at.Key == "href" {
+							href = at.Val
+						}
+					}
 					title = textOf(m)
 				}
 			})
