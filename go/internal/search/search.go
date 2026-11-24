@@ -350,7 +350,7 @@ func (a *Aggregator) search360(ctx context.Context, query string) ([]Result, err
 	// 无 cookie 反而 200 出 8 个 res-list。真实登录态 cookie 才稳（用户验证）。
 	if a.CookieFn != nil {
 		if c := a.CookieFn("so"); c != "" {
-			req.Header.Set("Cookie", c)
+			a.hc.SeedCookies(req.URL.String(), c)
 		}
 	}
 	resp, err := a.hc.Do(req)
@@ -479,7 +479,7 @@ func (a *Aggregator) searchBaidu(ctx context.Context, query string) ([]Result, e
 	// 持久化账号固化 cookie 优先（百度验证码 wappass 需 cookie 态）
 	if a.CookieFn != nil {
 		if c := a.CookieFn("baidu"); c != "" {
-			req.Header.Set("Cookie", c)
+			a.hc.SeedCookies(req.URL.String(), c)
 		}
 	}
 	resp, err := a.hc.Do(req)
@@ -757,7 +757,7 @@ func (a *Aggregator) searchSogou(ctx context.Context, query string) ([]Result, e
 	req.Header.Set("Referer", "https://www.sogou.com/")
 	if a.CookieFn != nil {
 		if c := a.CookieFn("sogou"); c != "" {
-			req.Header.Set("Cookie", c)
+			a.hc.SeedCookies(req.URL.String(), c)
 		}
 	}
 	resp, err := a.hc.Do(req)

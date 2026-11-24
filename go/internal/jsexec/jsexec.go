@@ -32,9 +32,12 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-quickjs/go-quickjs"
+
+	"mycast/internal/httptool"
 )
 
 // StreamHit 一次捕获到的流地址。
@@ -55,11 +58,22 @@ type Config struct {
 	Timeout  time.Duration                 // 执行超时（0=3s）。死循环在这里被打断
 	Memory   int                           // 内存上限字节（0=64MB）
 	MaxDepth int                           // 调用深度上限（0=512）
-	HTTP     *http.Client                  // fetch stub 用的 HTTP 客户端（可带 cookie/节流/浏览器头）
+	HTTP     *httptool.Client              // fetch stub 用的 HTTP 客户端（带 cookie jar/utls 指纹/节流）
 	BaseURL  string                        // 页面 base（解析相对 URL + 当 fetch 的 referer）
 	UA       string                        // navigator.userAgent
 	Console  func(format string, a ...any) // 站点脚本的 console.log 输出到哪
+
+	// 外链 <script src> 支持（保守：同域 + 数量/大小上限，用加固 client 下载）。
+	// 默认开 3 个；0=禁用外链（回到只跑内联）。真实站大量用外链混淆逻辑，关掉会漏。
+	MaxExternalScripts int // 最多下载执行的外链脚本数（0=默认3）
+	MaxExternalBytes   int // 单个外链脚本字节上限（0=512KB）
 }
+
+// 包级 lazy 默认 client（fetchExternal 未注入时用；独立使用 jsexec 也健壮）。
+var (
+	defaultOnce   sync.Once
+	defaultClient *httptool.Client
+)
 
 // AndroidChromeUA 默认 UA（移动端 Chrome）。
 const AndroidChromeUA = "Mozilla/5.0 (Linux; Android 13; SM-S9180) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36"
@@ -131,14 +145,39 @@ func (e *Engine) eval(src string) (quickjs.Value, error) {
 // 这是"行为观测型"嗅探：不依赖站方把 URL 存在哪个变量，所以站点无关。
 func (e *Engine) ExecPage(htmlText, baseURL string) *Result {
 	res := &Result{}
+	maxExt := e.cfg.MaxExternalScripts
+	if maxExt == 0 {
+		maxExt = 3
+	}
+	maxBytes := e.cfg.MaxExternalBytes
+	if maxBytes == 0 {
+		maxBytes = 512 << 10
+	}
 	scripts := extractScripts(htmlText)
 	res.Scripts = len(scripts)
-	for _, s := range scripts {
-		src := strings.TrimSpace(s)
-		if src == "" || isExternalSrc(s) {
+	extUsed := 0
+	for _, sc := range scripts {
+		srcAttr := srcAttrOf(sc.Attr)
+		if srcAttr != "" {
+			// 外链脚本：保守下载执行（同域 + 数量上限 + 大小上限）
+			if extUsed >= maxExt || !sameHost(baseURL, srcAttr) {
+				continue
+			}
+			body := e.fetchExternal(srcAttr)
+			if body == "" || len(body) > maxBytes {
+				continue
+			}
+			if _, err := e.eval(body); err != nil {
+				res.Error = err.Error()
+			}
+			extUsed++
 			continue
 		}
-		if _, err := e.eval(src); err != nil {
+		content := strings.TrimSpace(sc.Content)
+		if content == "" {
+			continue
+		}
+		if _, err := e.eval(content); err != nil {
 			// 单个 script 失败继续下一个（站点脚本互相依赖，逐个跑最稳）
 			res.Error = err.Error()
 			continue
@@ -180,11 +219,6 @@ func (e *Engine) flush(res *Result) {
 	}
 }
 
-// isExternalSrc 判断 <script> 标签是否带 src=（外链脚本，本包不下载执行）。
-func isExternalSrc(tag string) bool {
-	return regexp.MustCompile(`(?i)\ssrc\s*=`).MatchString(tag)
-}
-
 // looksLikeStream 判断一个 URL 是否"像"媒体流。
 // 保守判定：只看路径关键词，避免把任意静态资源误判成流。
 func looksLikeStream(u string) bool {
@@ -199,14 +233,62 @@ func looksLikeStream(u string) bool {
 
 // extractScripts 抽出 HTML 里所有 <script> 的内容。
 // 注意：外链脚本（带 src=）跳过，因为下载执行不可信脚本风险更高。
-func extractScripts(htmlText string) []string {
+// scriptTag 一个 <script> 标签（Attr=属性串，Content=内联内容）。
+type scriptTag struct {
+	Attr    string
+	Content string
+}
+
+func extractScripts(htmlText string) []scriptTag {
 	re := regexp.MustCompile(`(?is)<script\b([^>]*)>(.*?)</script\s*>`)
 	m := re.FindAllStringSubmatch(htmlText, -1)
-	out := make([]string, 0, len(m))
+	out := make([]scriptTag, 0, len(m))
 	for _, g := range m {
-		out = append(out, g[2])
+		out = append(out, scriptTag{Attr: g[1], Content: g[2]})
 	}
 	return out
+}
+
+// srcAttrOf 提取 <script ... src="..."> 里的 src 属性值。
+func srcAttrOf(attr string) string {
+	m := regexp.MustCompile(`(?i)\bsrc\s*=\s*["']([^"']+)["']`).FindStringSubmatch(attr)
+	if m == nil {
+		return ""
+	}
+	return strings.TrimSpace(m[1])
+}
+
+// sameHost 判断 ref 与 base 是否同域（外链脚本只信任同域）。
+func sameHost(base, ref string) bool {
+	if base == "" || ref == "" {
+		return false
+	}
+	bu, err1 := url.Parse(base)
+	ru, err2 := url.Parse(resolveURL(base, ref))
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	return bu.Host == ru.Host
+}
+
+// fetchExternal 用加固 client 下载外链脚本（带 cookie/指纹/节流）。
+// 未注入 client 时用包级 lazy 默认（外链脚本本身通常不需要登录态）。
+func (e *Engine) fetchExternal(rawurl string) string {
+	hc := e.cfg.HTTP
+	if hc == nil {
+		defaultOnce.Do(func() {
+			defaultClient, _ = httptool.New(httptool.Config{Timeout: 10 * time.Second})
+		})
+		hc = defaultClient
+	}
+	if hc == nil {
+		return ""
+	}
+	b, err := hc.Get(resolveURL(e.cfg.BaseURL, rawurl))
+	if err != nil {
+		return ""
+	}
+	return b
 }
 
 // resolveURL 相对 URL → 绝对 URL。
@@ -411,9 +493,9 @@ func (e *Engine) installStubs() error {
 	  scrollX: 0, scrollY: 0, pageXOffset: 0, pageYOffset: 0,
 	  visualViewport: { width: 360, height: 640, offsetLeft: 0, offsetTop: 0 },
 	  performance: { now: function(){ return Date.now(); }, timeOrigin: Date.now(), timing: { navigationStart: Date.now(), fetchStart: Date.now(), domContentLoadedEventStart: Date.now() } },
-	  setTimeout: function(fn, ms) { return 1; },
+	  setTimeout: function(fn, ms) { try { fn(); } catch(e) {} return 1; },
 	  clearTimeout: function() {},
-	  setInterval: function(fn, ms) { return 1; },
+	  setInterval: function(fn, ms) { try { fn(); } catch(e) {} return 1; },
 	  clearInterval: function() {},
 	  requestAnimationFrame: function(fn) { fn(0); return 1; },
 	  cancelAnimationFrame: function() {},

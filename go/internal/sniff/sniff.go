@@ -20,6 +20,7 @@ import (
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/charset"
 
+	"mycast/internal/httptool"
 	"mycast/internal/jsexec"
 )
 
@@ -46,8 +47,13 @@ type Config struct {
 	// 脚本取地址。这是替代旧 WebView 渲染路径的关键——执行取流那段 JS 不需要
 	// DOM 渲染 / GPU / WebKitGTK。
 	EnableJS bool
-	// JSEngine 引擎配置（EnableJS=true 时生效；UA 默认取 Config.UA，HTTP 用本提取器的 client）
+	// JSEngine 引擎配置（EnableJS=true 时生效；UA 默认取 Config.UA）
 	JSEngine jsexec.Config
+	// CookieDir Cookie 持久化目录（cookies/<host>.json）。L0/L2 共享同一个 httptool.Client，
+	// 所以取流（L2 的 fetch）也带 cookie 会话 + utls 指纹 + 节流。
+	CookieDir string
+	// ThrottleDelay 请求间隔基础值（随机抖动）；0=不节流
+	ThrottleDelay time.Duration
 }
 
 // Default 默认配置（覆盖苹果CMS/momovod 系常见盗版站 + /cid/ 变体）。
@@ -75,7 +81,8 @@ func Default() Config {
 // Extractor 集数提取器。
 type Extractor struct {
 	cfg Config
-	hc  *http.Client
+	hc  *http.Client     // L0 用（httptool 的底层 client）
+	hx  *httptool.Client // L2 的 fetch 用（带 cookie/utls/节流）
 }
 
 // New 构造提取器。
@@ -92,7 +99,17 @@ func New(cfg Config) *Extractor {
 	if cfg.TextHint == "" {
 		cfg.TextHint = "集"
 	}
-	return &Extractor{cfg: cfg, hc: &http.Client{Timeout: cfg.Timeout}}
+	hx, err := httptool.New(httptool.Config{
+		UA:        cfg.UA,
+		Timeout:   cfg.Timeout,
+		Delay:     cfg.ThrottleDelay,
+		Jitter:    0.5,
+		CookieDir: cfg.CookieDir,
+	})
+	if err != nil {
+		panic("sniff: httptool.New: " + err.Error())
+	}
+	return &Extractor{cfg: cfg, hc: hx.HTTPClient(), hx: hx}
 }
 
 // IsDetailPage 正则识别详情页（对齐 _is_detail_page）。
@@ -227,7 +244,7 @@ func (e *Extractor) resolveStreamJS(htmlText, playURL string) (string, string, e
 	if cfg.UA == "" {
 		cfg.UA = e.cfg.UA
 	}
-	cfg.HTTP = e.hc
+	cfg.HTTP = e.hx
 	eng, err := jsexec.New(cfg)
 	if err != nil {
 		return "", "", err

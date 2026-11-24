@@ -55,8 +55,9 @@ type Client struct {
 	hc  *http.Client
 	jar *cookiejar.Jar
 
-	mu   sync.Mutex
-	last time.Time // 上次请求时间（节流用）
+	mu             sync.Mutex
+	last           time.Time // 上次请求时间（节流用）
+	lastCookieSave time.Time // 上次写盘 cookie 时间（SaveCookies 节流）
 }
 
 // New 构造 Client。
@@ -209,6 +210,15 @@ func (c *Client) SaveCookies(rawURL string) {
 	if c.cfg.CookieDir == "" {
 		return
 	}
+	// 节流：高频搜索时避免每请求写盘（IO 浪费）。登录态 cookie 有效期长，
+	// 5s 窗口内的变化可接受丢失（下一次写盘会带上）。
+	c.mu.Lock()
+	if time.Since(c.lastCookieSave) < 5*time.Second {
+		c.mu.Unlock()
+		return
+	}
+	c.lastCookieSave = time.Now()
+	c.mu.Unlock()
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return
@@ -300,6 +310,30 @@ func dialTLSChrome(insecure bool) func(context.Context, string, string) (net.Con
 			return nil, err
 		}
 		return uconn, nil
+	}
+}
+
+// SeedCookies 把 "a=1; b=2" 形式的 Cookie 头解析后种进 jar（账号固化 cookie 统一入口）。
+// 与 CookieJar 自动捕获的会话 cookie 合并管理，避免 CookieFn 手动 Set("Cookie")
+// 覆盖 jar 导致丢 cookie。固化 cookie 同名时优先（SetCookies 按 name 覆盖）。
+func (c *Client) SeedCookies(rawURL, cookieHeader string) {
+	if cookieHeader == "" || c.jar == nil {
+		return
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return
+	}
+	for _, pair := range strings.Split(cookieHeader, ";") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		kv := strings.SplitN(pair, "=", 2)
+		if len(kv) != 2 {
+			continue
+		}
+		c.jar.SetCookies(u, []*http.Cookie{{Name: strings.TrimSpace(kv[0]), Value: strings.TrimSpace(kv[1])}})
 	}
 }
 

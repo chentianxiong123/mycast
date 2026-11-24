@@ -1,6 +1,9 @@
 package jsexec
 
 import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,7 +69,7 @@ func TestExecPageFetchStub(t *testing.T) {
 	if err != nil {
 		t.Fatalf("httptool.New: %v", err)
 	}
-	e, err := New(Config{Timeout: 3 * time.Second, HTTP: hc.HTTPClient(), BaseURL: "https://x.example.com/play/1"})
+	e, err := New(Config{Timeout: 3 * time.Second, HTTP: hc, BaseURL: "https://x.example.com/play/1"})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -146,4 +149,42 @@ func TestExecPageCookiePersist(t *testing.T) {
 		t.Fatal("hc nil")
 	}
 	t.Logf("cookie 目录: %s", dir)
+}
+
+// TestExecPageExternalScript 外链 <script src> 保守支持：同域下载执行，捕获流地址。
+// 用本地 httptest server 提供外链脚本（避免真实网络）。
+func TestExecPageExternalScript(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 外链脚本：混淆拼装 URL 后写入 video.src
+		fmt.Fprint(w, `
+			var _0xarr = ["aHR0cHM6Ly8=","Y2RuLnJlYWwuZXhhbXBsZS5jb20v","b2Qv","MTIzNC9pbmRleC5tM3U4"];
+			function _0xget(n){ return atob(_0xarr[n]); }
+			var u = eval('_0xget(0)+_0xget(1)+_0xget(2)+_0xget(3)');
+			var v = document.createElement('video');
+			v.src = u;
+		`)
+	}))
+	defer srv.Close()
+
+	// 同域 base（外链 script 的 host 与页面 host 一致 → 通过 sameHost）
+	base := srv.URL + "/vod/play/1234"
+	e, err := New(Config{Timeout: 3 * time.Second, BaseURL: base})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer e.Close()
+
+	// 页面：外链 script（src 指向同域），无内联脚本
+	html := `<html><head><script src="` + srv.URL + `/player.js"></script></head><body></body></html>`
+	res := e.ExecPage(html, base)
+	found := false
+	for _, h := range res.Hits {
+		if strings.Contains(h.URL, "1234/index.m3u8") {
+			found = true
+			t.Logf("外链 script 捕获到流地址: %s", h.URL)
+		}
+	}
+	if !found {
+		t.Errorf("外链 script 应被下载执行并捕获流地址, 实际 hits=%v err=%s", res.Hits, res.Error)
+	}
 }
