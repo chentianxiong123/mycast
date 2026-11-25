@@ -266,11 +266,20 @@ func (e *Extractor) resolveStreamJS(htmlText, playURL string) (string, string, e
 		return "", "", err
 	}
 	defer eng.Close()
+	// 先试手写 go-quickjs 路径（轻，不碰 DOM 的取流 JS 够用）
 	res := eng.ExecPage(htmlText, playURL)
-	if len(res.Hits) == 0 {
-		return "", "", errors.New("JS 引擎未捕获到流地址")
+	if len(res.Hits) > 0 {
+		return res.Hits[0].URL, guessMime(res.Hits[0].URL), nil
 	}
-	return res.Hits[0].URL, guessMime(res.Hits[0].URL), nil
+	// 失败再试 go-webengine 真 DOM 路径（jQuery/播放器碰 DOM 不崩，Eval 拿全局）
+	stream, _, werr := eng.WEResolveStream(htmlText, playURL)
+	if stream != "" {
+		return stream, guessMime(stream), nil
+	}
+	if werr != nil {
+		return "", "", werr
+	}
+	return "", "", errors.New("JS 引擎未捕获到流地址")
 }
 
 func resolveRel(base *url.URL, ref string) string {
