@@ -113,3 +113,27 @@ func (eng *Engine) WEExtractMeta(htmlText, pageURL string) map[string]interface{
 
 // 编译期断言：确保时间类型对齐
 var _ time.Duration = time.Second
+
+// WEEval 用 go-webengine 执行页面 JS + Eval 拿任意结果（真 DOM，站方 JS 不崩）。
+// 通用入口：取标题/集数/流/元数据都可。
+func (eng *Engine) WEEval(htmlText, pageURL, expr string) (interface{}, error) {
+	root, err := dom.Parse(htmlText)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), eng.cfg.Timeout)
+	defer cancel()
+	sess := wgjs.Begin(root, wgjs.Options{
+		PageURL:       pageURL,
+		UserAgent:     eng.cfg.UA,
+		Client:        eng.cfg.HTTP.HTTPClient(),
+		Ctx:           ctx,
+		Timeout:       eng.cfg.Timeout,
+		ViewportWidth: 390,
+		ViewportHeight: 844,
+	})
+	sess.RunInitialScripts()
+	sess.RunPending()
+	sess.DispatchLifecycle()
+	return sess.Eval(expr)
+}
