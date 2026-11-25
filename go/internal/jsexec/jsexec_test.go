@@ -188,3 +188,49 @@ func TestExecPageExternalScript(t *testing.T) {
 		t.Errorf("外链 script 应被下载执行并捕获流地址, 实际 hits=%v err=%s", res.Hits, res.Error)
 	}
 }
+
+// TestExecPageMetadata 验证 jsexec 能从页面 JS 捕获元数据（fetch 响应 + 全局变量）。
+func TestExecPageMetadata(t *testing.T) {
+	// 页面里：fetch 拿苹果CMS JSON + 全局变量 window.vodDetail
+	html := `<html><body>
+<script>
+fetch('/api.php/provide/vod/?ac=detail&wd=test');
+window.vodDetail = {vod_name:"我的山与海", vod_actor:"谭松韵,董晴", vod_director:"柏杉", vod_year:"2026"};
+</script>
+</body></html>`
+	// 用一个 httptest 模拟 fetch 响应（苹果CMS JSON）
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"vod_id":1,"vod_name":"我的山与海","vod_actor":"谭松韵,董晴,奚望","vod_director":"柏杉","vod_area":"中国大陆/新加坡","vod_year":"2026","vod_blurb":"简介","vod_score":"8.5"}`))
+	}))
+	defer srv.Close()
+
+	hc, herr := httptool.New(httptool.Config{Timeout: 5 * time.Second, Delay: 0})
+	if herr != nil {
+		t.Fatal(herr)
+	}
+	eng, err := New(Config{
+		HTTP:    hc,
+		UA:      "Mozilla/5.0",
+		Timeout: 5 * time.Second,
+		BaseURL: srv.URL + "/play/1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+	res := eng.ExecPage(html, srv.URL+"/play/1")
+	t.Logf("Scripts=%d Hits=%d Media=%+v", res.Scripts, len(res.Hits), res.Media)
+	if res.Media == nil {
+		t.Fatal("Media 为 nil，未捕获元数据")
+	}
+	if res.Media.Title != "我的山与海" {
+		t.Errorf("Title: got %q", res.Media.Title)
+	}
+	if res.Media.Director != "柏杉" {
+		t.Errorf("Director: got %q", res.Media.Director)
+	}
+	if res.Media.Score != "8.5" {
+		t.Errorf("Score: got %q（fetch 响应应有）", res.Media.Score)
+	}
+}

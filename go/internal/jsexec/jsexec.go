@@ -38,6 +38,7 @@ import (
 	"github.com/go-quickjs/go-quickjs"
 
 	"mycast/internal/httptool"
+	"mycast/internal/meta"
 )
 
 // StreamHit 一次捕获到的流地址。
@@ -51,6 +52,7 @@ type Result struct {
 	Hits    []StreamHit `json:"hits"`    // 捕获到的流地址
 	Scripts int         `json:"scripts"` // 实际执行的 script 数
 	Error   string      `json:"error,omitempty"`
+	Media   *meta.Media `json:"media,omitempty"` // 元数据（主演/导演/地区/年份/简介，三路归一）
 }
 
 // Config 引擎配置。
@@ -217,6 +219,52 @@ func (e *Engine) flush(res *Result) {
 		}
 		res.Hits = append(res.Hits, StreamHit{URL: u, Source: h.Source})
 	}
+
+	// 元数据：优先 fetch 响应（__fetchMeta），兜底全局变量
+	res.Media = e.extractMeta()
+}
+
+// appendFetchMeta 往 __fetchMeta 里塞一条 JSON（fetch stub 用）。
+func appendFetchMeta(rt *quickjs.Runtime, body string) {
+	src := fmt.Sprintf("__captureMeta(%s);", jsQuote(body))
+	_, _ = rt.Eval(src)
+}
+
+// extractMeta 从 __fetchMeta（fetch 响应）+ 全局变量（window.vodDetail 等）提取元数据。
+// 返回 nil 表示没提取到（降级到只有集数）。
+func (e *Engine) extractMeta() *meta.Media {
+	rt := e.rt
+
+	// ① fetch 响应（__fetchMeta 里存的是 JSON 字符串）
+	if v, err := rt.Eval("__fetchMeta || []"); err == nil {
+		var raw []string
+		if err := v.Decode(&raw); err == nil {
+			for _, body := range raw {
+				if m := meta.FromFetchResponse(body); !m.Empty() {
+					return &m
+				}
+			}
+		}
+	}
+
+	// ② 全局变量（window.vodDetail / __NEXT_DATA__ / __INITIAL_STATE__）
+	for _, key := range []string{
+		"window.vodDetail", "window.vod_detail", "window.detail", "window.data",
+		"__NEXT_DATA__", "window.__INITIAL_STATE__", "window.__NUXT__",
+	} {
+		v, err := rt.Eval("JSON.stringify(" + key + " || null)")
+		if err != nil {
+			continue
+		}
+		s := strings.TrimSpace(v.String())
+		if s == "null" || s == "undefined" || s == "" {
+			continue
+		}
+		if m := meta.FromGlobal(s); !m.Empty() {
+			return &m
+		}
+	}
+	return nil
 }
 
 // looksLikeStream 判断一个 URL 是否"像"媒体流。
@@ -364,6 +412,10 @@ func (e *Engine) installStubs() error {
 		}
 		defer resp.Body.Close()
 		b, _ := io.ReadAll(resp.Body)
+		// 元数据捕获：响应体如果是 JSON 且含苹果CMS 字段，塞进 __fetchMeta
+		if ct := resp.Header.Get("Content-Type"); strings.Contains(ct, "json") || strings.Contains(string(b), "vod_") {
+			appendFetchMeta(rt, string(b))
+		}
 		return string(b)
 	})
 
@@ -383,7 +435,9 @@ func (e *Engine) installStubs() error {
 	bootstrap := `
 	// ===== 捕获器 =====
 	var __captured = [];
+	var __fetchMeta = [];  // fetch 响应的 JSON 元数据
 	function __capture(u, src) { if (u) __captured.push({url: u, source: src}); }
+	function __captureMeta(jsonStr) { if (jsonStr) __fetchMeta.push(jsonStr); }
 
 	// ===== 最小 DOM =====
 	function __mkEl(tag) {
