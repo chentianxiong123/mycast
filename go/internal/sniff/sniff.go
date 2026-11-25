@@ -23,6 +23,7 @@ import (
 
 	"mycast/internal/httptool"
 	"mycast/internal/jsexec"
+	"mycast/internal/meta"
 )
 
 // Episode 一集：集数 + 标题 + 播放页链接。
@@ -876,3 +877,37 @@ var reEPStrict = regexp.MustCompile(`第\s*\d+\s*[集期话]`)
 
 // macCMS 集数路径形态：/xxx/<id>-<n>-<ep>.html 或 /xxx/12345-1-1.html（数字-数字-数字 结尾）。
 var reEpShape = regexp.MustCompile(`/[^/]+/\d+-\d+-\d+(?:\.html?)?$`)
+
+// SiteDetail 一条龙的“进站→拿流”结果。
+type SiteDetail struct {
+	Media    meta.Media
+	Episodes []Episode
+	Stream   string
+	Mime     string
+	Source   string // 流来源："l0-regex" | "l2-js" | "l3-webview"
+	Err      error
+}
+
+// ResolveSiteDetail 一条龙：进站详情/播放页 → 名字/简介（meta）+ 集数列表（Extract）+ 拿流（ResolveStream）。
+// 覆盖你说的“几个步骤”：① 名字/简介 ② 集数 ③ 每集链接 ④ 进播放页拿流。
+// 全 L0（HTTP+正则），零 CGO。混淆站流需 JS 算时 ResolveStream 内部降级 L2。
+func (e *Extractor) ResolveSiteDetail(htmlText, pageURL string) SiteDetail {
+	out := SiteDetail{Source: "l0-regex"}
+	// ① 名字/简介/主演/地区（meta.FromHTML）
+	out.Media = meta.FromHTML(htmlText)
+	// ②③ 集数列表 + 每集链接（Extract）
+	out.Episodes = e.Extract(htmlText, pageURL)
+	// ④ 拿流：若本页含流地址则直接 Resolve；否则取第一集的播放页 Resolve。
+	//     注：ResolveStream 需要播放页 HTML；这里用 pageURL 若是播放页则直接拿，
+	//     若是详情页则拿第一集的播放页。
+	sd := e
+	stream, mime, err := sd.ResolveStream(pageURL)
+	if err != nil && len(out.Episodes) > 0 {
+		// 详情页：取第一集播放页拿流
+		stream, mime, err = sd.ResolveStream(out.Episodes[0].URL)
+	}
+	out.Stream = stream
+	out.Mime = mime
+	out.Err = err
+	return out
+}
