@@ -1,0 +1,25 @@
+# MyCast CI —— 全量单测（纯手动触发，不做自动触发）。
+#
+# 触发：仅在 Actions 页手动点 Run workflow（workflow_dispatch only）。
+# 职责：go test ./...（含 JA3 / Akamai HTTP/2 指纹断言：TestJA3Fingerprint / TestAkamaiH2Fingerprint）
+name: ci-test
+
+on:
+  workflow_dispatch: # 纯手动触发
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: 全量单测（含 JA3/Akamai 指纹断言）
+        run: cd go && go test ./... -timeout 300s

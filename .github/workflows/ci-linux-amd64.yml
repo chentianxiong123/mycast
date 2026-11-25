@@ -1,0 +1,32 @@
+# MyCast CI —— linux/amd64 平台独立构建（纯手动触发，不做自动触发）。
+#
+# 触发：仅在 Actions 页手动点 Run workflow（workflow_dispatch only）。
+# 职责：主平台产物 + 纯静态校验
+name: ci-linux-amd64
+
+on:
+  workflow_dispatch: # 纯手动触发
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+      - name: 交叉编译 linux/amd64（零 CGo 硬约束）
+        run: cd go && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/mycast-linux-amd64 ./cmd/mycast
+      - name: 纯静态校验（linux/amd64 产物非动态链接，单二进制拷贝即跑）
+        run: |
+          if ldd /tmp/mycast-linux-amd64 2>&1 | grep -qiE "not a dynamic|statically"; then
+            echo "✅ linux/amd64 纯静态链接"
+          else
+            echo "❌ linux/amd64 非静态链接（违背零依赖约束）"
+            ldd /tmp/mycast-linux-amd64
+            exit 1
+          fi
