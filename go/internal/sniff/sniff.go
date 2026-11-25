@@ -6,6 +6,7 @@
 package sniff
 
 import (
+	"compress/gzip"
 	"encoding/base64"
 	"errors"
 	"io"
@@ -165,12 +166,20 @@ func (e *Extractor) Fetch(rawURL string) (string, error) {
 	if resp.StatusCode != http.StatusOK {
 		return "", &HTTPError{Code: resp.StatusCode}
 	}
-	// 按响应头/内容自动识别编码（GBK 等 → UTF-8）
-	body, err := charset.NewReader(resp.Body, resp.Header.Get("Content-Type"))
-	if err != nil {
-		body = resp.Body
+	// gzip 解压（e.hc 是 httptool 的 client，可能返回压缩 body；std http.Client 自动解压但 e.hc 不一定）
+	var body io.Reader = resp.Body
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		if gz, gerr := gzip.NewReader(resp.Body); gerr == nil {
+			defer gz.Close()
+			body = gz
+		}
 	}
-	b, err := io.ReadAll(body)
+	// 按响应头/内容自动识别编码（GBK 等 → UTF-8）
+	encoded, err := charset.NewReader(body, resp.Header.Get("Content-Type"))
+	if err != nil {
+		encoded = body
+	}
+	b, err := io.ReadAll(encoded)
 	if err != nil {
 		return "", err
 	}
@@ -195,6 +204,12 @@ func (e *Extractor) ResolveStream(playURL string) (streamURL, mime string, err e
 	// 1. 绝对 m3u8（最可靠：player 配置内嵌的完整地址）
 	if m := regexp.MustCompile(`https?://[^"'<>\\\s]+?\.m3u8[^"'<>\\\s]*`).FindString(htmlText); m != "" {
 		return strings.TrimRight(m, ",'\")"), "application/vnd.apple.mpegurl", nil
+	}
+	// 1b. JSON 转义形式（苹果CMS player_aaaa.url 常见：URL 里 / 被转义成 \）
+	//     匹配后还原，再 TrimRight
+	if m := regexp.MustCompile(`https?:\\?/\\?/[^"\'\s]+?\.m3u8`).FindString(htmlText); m != "" {
+		unesc := strings.ReplaceAll(m, "\\/", "/")
+		return strings.TrimRight(unesc, ",'\")"), "application/vnd.apple.mpegurl", nil
 	}
 	// 2. 绝对 mp4
 	if m := regexp.MustCompile(`https?://[^"'<>\\\s]+?\.mp4[^"'<>\\\s]*`).FindString(htmlText); m != "" {

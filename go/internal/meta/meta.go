@@ -60,10 +60,8 @@ func FromHTML(htmlText string) Media {
 		m.Poster = firstMeta(htmlText, `(?is)<meta[^>]*property=[""]og:image[""][^>]*content=["']([^"']+)["']`)
 	}
 
-	// ③ 苹果CMS 服务端渲染字段（部分站把 vod 字段直接渲染进 HTML）
-	if m.Title == "" || m.Actors == "" {
-		fillFromMacCMS(m, htmlText)
-	}
+	// ③ 苹果CMS stui 服务端渲染（stui-content__detail 容器：类型/地区/主演/导演）
+	m = fillFromStui(m, htmlText)
 
 	return m
 }
@@ -132,6 +130,101 @@ func FromGlobal(globalJSON string) Media {
 		return m
 	}
 	return Media{}
+}
+
+// fillFromStui 解析苹果CMS stui UI 服务端渲染的元数据。
+// 特征：<div class="stui-content__detail"> 容器里，类型/地区/主演/导演 用
+// "类型：</span><a>国产</a>" 形式渲染。stui 是苹果CMS 默认 UI 库（大量盗版站用）。
+func fillFromStui(m Media, htmlText string) Media {
+	// 标题：<h1 class="title">我的山与海</h1>
+	if m.Title == "" {
+		if mt := reStuiTitle.FindStringSubmatch(htmlText); mt != nil {
+			m.Title = strings.TrimSpace(mt[1])
+		}
+	}
+	// 评分：<span class="score text-red">8.0</span>
+	if m.Score == "" {
+		if ms := reStuiScore.FindStringSubmatch(htmlText); ms != nil {
+			m.Score = strings.TrimSpace(ms[1])
+		}
+	}
+	// 取 stui-content__detail 容器段（元数据都在这里面；放宽到 5000 字符，
+	// 因为导演/年份等可能排在容器后较远处）。找不到容器则用全文兜底。
+	seg := htmlText
+	if i := indexOf(htmlText, "stui-content__detail"); i >= 0 {
+		seg = htmlText[i : i+min(5000, len(htmlText)-i)]
+	}
+	// 类型/地区/主演/导演：都是 "k：</span><a>x</a>" 形式
+	if t := stuiFieldLink(seg, "类型"); t != "" {
+		m.Type = t
+	}
+	if m.Actors == "" {
+		m.Actors = stuiFieldLink(seg, "主演")
+	}
+	if m.Director == "" {
+		m.Director = stuiFieldLink(seg, "导演")
+	}
+	m.Region = stuiFieldLinks(seg, "地区")
+	return m
+}
+
+var (
+	reStuiTitle = regexp.MustCompile(`<h1\s+class="title"[^>]*>([^<]+)`)
+	reStuiScore = regexp.MustCompile(`<span\s+class="score[^"]*"[^>]*>([^<]+)`)
+)
+
+// stuiFieldLink 取 seg 里 "k：" 后第一个 <a> 文本（类型/主演/导演 用，单值）。
+func stuiFieldLink(seg, k string) string {
+	links := stuiFieldLinks(seg, k)
+	if len(links) > 0 {
+		return links[0]
+	}
+	return ""
+}
+
+// stuiFieldLinks 取 seg 里 "k：</span>" 到下一个 "text-muted" 或 "</p>" 之间所有 <a> 文本。
+// 精确化：苹果CMS stui 每个字段是 <span class="text-muted">k：</span><a>...</a>... 块，
+// 块边界是下一个 text-muted 标签（不是 </p>，因为类型/地区/年份可能同 <p>）。
+func stuiFieldLinks(seg, k string) []string {
+	// 精确定位 "<span...>k：</span>" 或 "k：</span>"
+	anchor := regexp.QuoteMeta(k) + `：</span>`
+	i := indexOf(seg, anchor)
+	if i < 0 {
+		anchor = regexp.QuoteMeta(k) + ":</span>"
+		i = indexOf(seg, anchor)
+	}
+	if i < 0 {
+		return nil
+	}
+	rest := seg[i+len(k):]
+	// 块结束：下一个 text-muted（下一个字段开始）或 </p>
+	end := indexOf(rest, "text-muted")
+	if end <= 0 {
+		end = indexOf(rest, "</p>")
+	}
+	if end <= 0 {
+		end = min(len(rest), 200)
+	}
+	chunk := rest[:end]
+	re := regexp.MustCompile(`<a[^>]*>([^<]+)</a>`)
+	ms := re.FindAllStringSubmatch(chunk, -1)
+	out := make([]string, 0, len(ms))
+	for _, m := range ms {
+		if x := strings.TrimSpace(m[1]); x != "" {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+// indexOf 找子串位置（避免 strings.Index 没 import，其实可以用，这里统一）。
+func indexOf(s, sub string) int {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
 }
 
 // ===== 内部实现 =====
