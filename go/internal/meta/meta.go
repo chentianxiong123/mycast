@@ -70,21 +70,35 @@ func FromHTML(htmlText string) Media {
 
 // FromFetchResponse 解析 fetch 响应体（JSON）提取元数据。
 // 站点 JS 调 API 拿元数据，响应可能是苹果CMS 标准 JSON 或自定义。
+// 苹果CMS 两种返回形态都要处理：
+//   - 单对象：{vod_name:..., vod_actor:...}
+//   - 列表套壳：{code:1, list:[{vod_name:...}]}（ac=detail 带 wd 搜索时常见）
 func FromFetchResponse(body string) Media {
 	if strings.TrimSpace(body) == "" {
 		return Media{}
 	}
-	// 先试苹果CMS 标准字段
-	var vod map[string]any
-	if err := json.Unmarshal([]byte(body), &vod); err == nil {
-		if m := fromMacCMSMap(vod); !m.Empty() {
+	// ① 顶层直接是苹果CMS 对象（有 vod_ 字段）
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(body), &obj); err == nil {
+		if m := fromMacCMSMap(obj); !m.Empty() {
 			return m
 		}
-	}
-	// 再试 JSON-LD 嵌套（有些站 API 返回 schema.org 结构）
-	var ld map[string]any
-	if err := json.Unmarshal([]byte(body), &ld); err == nil {
-		if m := fillFromJSONLDMap(Media{}, ld); !m.Empty() {
+		// ② 列表套壳：list 数组里每个元素才是苹果CMS 对象
+		if list, ok := obj["list"].([]any); ok && len(list) > 0 {
+			if first, ok := list[0].(map[string]any); ok {
+				if m := fromMacCMSMap(first); !m.Empty() {
+					return m
+				}
+			}
+		}
+		// ③ data 套壳（有些站用 data 而非 list）
+		if data, ok := obj["data"].(map[string]any); ok {
+			if m := fromMacCMSMap(data); !m.Empty() {
+				return m
+			}
+		}
+		// ④ JSON-LD 嵌套（schema.org 结构）
+		if m := fillFromJSONLDMap(Media{}, obj); !m.Empty() {
 			return m
 		}
 	}
@@ -250,7 +264,7 @@ func fromMacCMSMap(m map[string]any) Media {
 		case "title":
 			out.Title = s
 		case "actors":
-			out.Actors = s
+			out.Actors = trimField(s)
 		case "director":
 			out.Director = s
 		case "region":
@@ -341,6 +355,20 @@ func splitRegion(s string) []string {
 		}
 	}
 	return out
+}
+
+// trimField 清理元数据字段（源数据常带脏字符：": 谭松韵"、首尾空格等）。
+func trimField(s string) string {
+	s = strings.TrimSpace(s)
+	// 去掉开头的 ": " / "：" / "主演" 等脏前缀（360zy 等站的 vod_actor 实测有此问题）
+	for _, p := range []string{": ", "：", "主演：", "主演: "} {
+		if strings.HasPrefix(s, p) {
+			s = strings.TrimPrefix(s, p)
+		}
+	}
+	// 去掉尾部逗号/斜杠
+	s = strings.TrimRight(s, ",，/ 	")
+	return strings.TrimSpace(s)
 }
 
 func min(a, b int) int {

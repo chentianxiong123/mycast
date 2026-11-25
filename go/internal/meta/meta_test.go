@@ -111,3 +111,22 @@ func TestMedia_Empty(t *testing.T) {
 		t.Error("有 Title 的 Media 应 Empty()=false")
 	}
 }
+
+// TestFromFetchResponse_ListWrap ac=detail 搜索返回 list 套壳（360zy.com 实测）
+func TestFromFetchResponse_ListWrap(t *testing.T) {
+	jsonBody := `{"code":1,"msg":"数据列表","total":1,"list":[{"vod_id":92763,"vod_name":"我的山与海","vod_actor":"谭松韵 / 董晴","vod_director":"柏杉","vod_area":"中国大陆","vod_year":"2026","vod_blurb":"改编自梁晓声原著","vod_score":"8.5","vod_pic":"https://img.example.com/1.webp"}]}`
+	m := FromFetchResponse(jsonBody)
+	if m.Title != "我的山与海" {
+		t.Errorf("Title: got %q want 我的山与海", m.Title)
+	}
+	if m.Actors != "谭松韵 / 董晴" {
+		t.Errorf("Actors: got %q", m.Actors)
+	}
+	if m.Director != "柏杉" {
+		t.Errorf("Director: got %q", m.Director)
+	}
+	if m.Poster == "" {
+		t.Error("Poster 未从 list 套壳提取")
+	}
+	t.Logf("list 套壳提取: %+v", m)
+}
