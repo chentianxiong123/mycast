@@ -23,6 +23,7 @@ import (
 	"mycast/internal/bili"
 	"mycast/internal/mcp"
 	"mycast/internal/media"
+	"mycast/internal/meta"
 	"mycast/internal/relay"
 	"mycast/internal/search"
 	"mycast/internal/sniff"
@@ -53,11 +54,11 @@ type Instance struct {
 
 	// 纯页面渲染通道（L3）：点击搜索结果 → 子 WebView 渲染真实页 → outerHTML 存这，
 	// 前端直接显示（不归一化/不去广告）
-	pageMu       sync.Mutex
-	pageHTML     string
-	pageURL      string
-	pageIsVideo  bool            // 方向B：DetectVideoPage 判断（点结果→识别影视页）
-	pageEps      []sniff.Episode // 方向B：提取的集数（识别并套进去）
+	pageMu      sync.Mutex
+	pageHTML    string
+	pageURL     string
+	pageIsVideo bool            // 方向B：DetectVideoPage 判断（点结果→识别影视页）
+	pageEps     []sniff.Episode // 方向B：提取的集数（识别并套进去）
 
 	// WebviewRender 宿主注入（sniff L3 兜底：渲染盗版站详情页，回传 outerHTML）。
 	// 降级链：L0 纯 HTTP+正则 → L1 NeedsBrowser 特征 → L2 嵌入式 JS 引擎（jsexec）
@@ -232,12 +233,15 @@ func New(opts Options) *Instance {
 			return
 		}
 		Logf("[sniff] 成功 url=%s 集数=%d", u, len(eps))
-		// 抓封面图（学 OnScreen artwork，但抓盗版站详情页图）
-		poster := ""
+		// 抓封面图 + 元数据（学百度 App 干净卡片：主演/导演/地区/年份/简介）
+		media := meta.Media{}
 		if htmlText, ferr := e.Fetch(u); ferr == nil {
-			poster = e.ExtractPoster(htmlText, u)
+			media = meta.FromHTML(htmlText)
+			if media.Poster == "" {
+				media.Poster = e.ExtractPoster(htmlText, u)
+			}
 		}
-		writeJSON(w, map[string]any{"ok": true, "url": u, "episodes": eps, "poster": poster})
+		writeJSON(w, map[string]any{"ok": true, "url": u, "episodes": eps, "poster": media.Poster, "media": media})
 	})
 
 	// 盗版站闭环：播放页 URL → 拿流(m3u8/mp4) → 投屏。妈妈操作 2 的最后一段。
@@ -430,7 +434,6 @@ func New(opts Options) *Instance {
 		// 方向B：返回 is_video + 集数（识别则前端套进去，非影视则导航真实页）
 		writeJSON(w, map[string]any{"ok": true, "url": u, "is_video": isVideo, "episodes": eps})
 	})
-
 
 	// 搜索盗版站（bing/360/百度 聚合，接 /api/sniff 提取集数）
 	mux.HandleFunc("/api/search/render", func(w http.ResponseWriter, rq *http.Request) {

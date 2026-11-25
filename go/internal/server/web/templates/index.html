@@ -267,6 +267,14 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
 .detail-body{flex:1;padding:14px 14px 80px;overflow-y:auto}
 .detail-title{font-size:20px;font-weight:800;margin-bottom:5px}
 .detail-meta{font-size:11px;margin-bottom:12px}
+.detail-card{background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:12px}
+.detail-card .row{font-size:12px;line-height:1.7;color:var(--dim);display:flex;gap:6px}
+.detail-card .row .k{color:var(--dim);flex-shrink:0;min-width:32px;opacity:.7}
+.detail-card .row .v{color:var(--txt);flex:1;word-break:break-all}
+.detail-card .row.empty{display:none}
+.detail-synopsis{font-size:12px;line-height:1.6;color:var(--dim);margin-top:8px;max-height:4.8em;overflow:hidden}
+.detail-synopsis.open{max-height:none}
+.detail-synopsis-toggle{color:var(--acc);font-size:11px;cursor:pointer;margin-top:4px;display:inline-block}
 .detail-eps{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
 .detail-ep{background:var(--card2);border:1px solid var(--line);border-radius:8px;padding:9px 4px;text-align:center;cursor:pointer;font-size:11px;color:var(--dim)}
 .detail-ep:active{transform:scale(.96)}
@@ -500,6 +508,14 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
   <div class="detail-cover" id="detail-cover">?</div>
   <div class="detail-body">
     <div class="detail-title" id="detail-title">…</div>
+    <div class="detail-card hidden" id="detail-card">
+      <div class="row" id="dc-actors"><span class="k">主演</span><span class="v"></span></div>
+      <div class="row" id="dc-director"><span class="k">导演</span><span class="v"></span></div>
+      <div class="row" id="dc-region"><span class="k">地区</span><span class="v"></span></div>
+      <div class="row" id="dc-extra"><span class="k">类型</span><span class="v"></span></div>
+      <div class="detail-synopsis" id="dc-synopsis"></div>
+      <span class="detail-synopsis-toggle" id="dc-toggle" onclick="toggleSynopsis()">展开 ⌄</span>
+    </div>
     <div class="detail-meta dim" id="detail-meta">提取集数中…</div>
     <div class="detail-eps" id="detail-eps"></div>
   </div>
@@ -771,6 +787,8 @@ function openDetail(url, title) {
   document.getElementById('detail-title').textContent = title || '…';
   document.getElementById('detail-meta').textContent = '提取集数中…';
   document.getElementById('detail-eps').innerHTML = '';
+  document.getElementById('detail-card').classList.add('hidden');
+  document.getElementById('dc-synopsis').classList.remove('open');
   document.getElementById('detail-play').disabled = true;
   document.getElementById('detail-local').disabled = true;
   document.getElementById('detail-copy').disabled = true;
@@ -784,6 +802,7 @@ async function loadDetail(url, title) {
     const r = await fetch('/api/sniff?url='+encodeURIComponent(url));
     const d = await r.json();
     if(d.ok && d.episodes && d.episodes.length) {
+      renderMedia(d.media);
       renderDetailEps(d.episodes, title||'');
       return;
     }
@@ -794,6 +813,37 @@ async function loadDetail(url, title) {
     }
     document.getElementById('detail-meta').textContent = d.msg||'提取失败';
   } catch(e) { document.getElementById('detail-meta').textContent = '网络错误: '+e.message; }
+}
+
+// 渲染元数据卡片（学百度：主演/导演/地区/类型分行 + 简介可展开）
+function renderMedia(m) {
+  const card = document.getElementById('detail-card');
+  if (!m || (!m.actors && !m.director && !m.region && !m.year && !m.type && !m.synopsis)) {
+    card.classList.add('hidden');
+    return;
+  }
+  card.classList.remove('hidden');
+  const setRow = (id, val) => {
+    const row = document.getElementById(id);
+    const v = row.querySelector('.v');
+    if (val && val.length) { v.textContent = val; row.classList.remove('empty'); }
+    else { row.classList.add('empty'); }
+  };
+  setRow('dc-actors', m.actors);
+  setRow('dc-director', m.director);
+  setRow('dc-region', Array.isArray(m.region) ? m.region.join(' / ') : (m.region||''));
+  const extra = [m.type, m.year, m.updated].filter(x=>x&&x.length).join(' · ');
+  setRow('dc-extra', extra);
+  const syn = document.getElementById('dc-synopsis');
+  syn.textContent = m.synopsis || '';
+  const tog = document.getElementById('dc-toggle');
+  if (m.synopsis && m.synopsis.length > 60) { syn.classList.remove('open'); tog.style.display=''; tog.textContent='展开 ⌄'; }
+  else tog.style.display='none';
+}
+function toggleSynopsis() {
+  const syn = document.getElementById('dc-synopsis');
+  syn.classList.toggle('open');
+  document.getElementById('dc-toggle').textContent = syn.classList.contains('open') ? '收起 ⌃' : '展开 ⌄';
 }
 
 function renderDetailEps(eps, title) {
