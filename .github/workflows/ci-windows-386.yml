@@ -1,0 +1,25 @@
+# MyCast CI —— windows/386 平台独立构建（纯手动触发，不做自动触发，只编译不测）。
+#
+# 触发：仅在 Actions 页手动点 Run workflow（workflow_dispatch only）。
+# 职责：目标平台产物。单测在 ci-test.yml。
+name: ci-windows-386
+
+on:
+  workflow_dispatch: # 纯手动触发
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: 交叉编译 windows/386（零 CGo 硬约束）
+        run: cd go && CGO_ENABLED=0 GOOS=windows GOARCH=386 go build -o /tmp/mycast-windows-386 ./cmd/mycast

@@ -1,7 +1,7 @@
-# MyCast CI —— linux/amd64 平台独立构建（纯手动触发，不做自动触发）。
+# MyCast CI —— linux/amd64 平台独立构建（纯手动触发，不做自动触发，只编译不测）。
 #
 # 触发：仅在 Actions 页手动点 Run workflow（workflow_dispatch only）。
-# 职责：主平台产物 + 纯静态校验
+# 职责：主平台产物 + 纯静态校验。单测在 ci-test.yml。
 name: ci-linux-amd64
 
 on:
@@ -10,15 +10,17 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
+
       - name: 安装 Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.26'
           cache: true
+
       - name: 交叉编译 linux/amd64（零 CGo 硬约束）
         run: cd go && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/mycast-linux-amd64 ./cmd/mycast
       - name: 纯静态校验（linux/amd64 产物非动态链接，单二进制拷贝即跑）
