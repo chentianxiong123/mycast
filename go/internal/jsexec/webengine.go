@@ -10,11 +10,41 @@ package jsexec
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	"github.com/go-webengine/engine/dom"
 	wgjs "github.com/go-webengine/engine/js"
 )
+
+// lightClient 纯 HTTP 轻头 client（只设 UA，不设 Sec-Fetch/Referer/Sec-CH-UA）。
+// 资源站/官方站/技术站反爬松到中等，轻头就通（WAF BIC 判"全套浏览器头 + 无 cookie = 爬虫"→ 403，
+// 轻头"普通客户端"反而放行）。go-webengine 拉外部 <script>/数据用轻头，不撞 BIC。
+func (eng *Engine) lightClient() *http.Client {
+	c := &http.Client{Timeout: eng.cfg.Timeout}
+	return c
+}
+
+// setLightUA 给请求设轻头 UA（go-webengine 的 js.Client 是 *http.Client，
+// 它的 Transport 不设 UA——这里包一层 RoundTripper 注入轻头 UA）。
+func lightClientWithUA(ua string, timeout time.Duration) *http.Client {
+	c := &http.Client{Timeout: timeout}
+	c.Transport = &lightUATransport{base: http.DefaultTransport, ua: ua}
+	return c
+}
+
+type lightUATransport struct {
+	base http.RoundTripper
+	ua   string
+}
+
+func (t *lightUATransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// 只设 UA（轻头，不 Sec-Fetch/Referer/Sec-CH-UA）——资源站 WAF 放行
+	if req.Header.Get("User-Agent") == "" {
+		req.Header.Set("User-Agent", t.ua)
+	}
+	return t.base.RoundTrip(req)
+}
 
 // WEResolveStream 用 go-webengine 执行页面 JS 取流地址（L2 增强层）。
 // 返回取到的流地址（m3u8/mp4）+ Eval 的全局变量 + 错误。
@@ -27,12 +57,12 @@ func (eng *Engine) WEResolveStream(htmlText, pageURL string) (stream string, glo
 	defer cancel()
 
 	sess := wgjs.Begin(root, wgjs.Options{
-		PageURL:       pageURL,
-		UserAgent:     eng.cfg.UA,
-		Client:        eng.cfg.HTTP.HTTPClient(),
-		Ctx:           ctx,
-		Timeout:       eng.cfg.Timeout,
-		ViewportWidth: 390,
+		PageURL:        pageURL,
+		UserAgent:      eng.cfg.UA,
+		Client:         lightClientWithUA(eng.cfg.UA, eng.cfg.Timeout), // 轻头（纯 HTTP 只 UA），资源站 WAF 放行
+		Ctx:            ctx,
+		Timeout:        eng.cfg.Timeout,
+		ViewportWidth:  390,
 		ViewportHeight: 844,
 	})
 	// 跑页面 JS（jQuery/播放器，真 DOM 不崩）
@@ -79,12 +109,12 @@ func (eng *Engine) WEExtractMeta(htmlText, pageURL string) map[string]interface{
 	ctx, cancel := context.WithTimeout(context.Background(), eng.cfg.Timeout)
 	defer cancel()
 	sess := wgjs.Begin(root, wgjs.Options{
-		PageURL:       pageURL,
-		UserAgent:     eng.cfg.UA,
-		Client:        eng.cfg.HTTP.HTTPClient(),
-		Ctx:           ctx,
-		Timeout:       eng.cfg.Timeout,
-		ViewportWidth: 390,
+		PageURL:        pageURL,
+		UserAgent:      eng.cfg.UA,
+		Client:         lightClientWithUA(eng.cfg.UA, eng.cfg.Timeout), // 轻头（纯 HTTP 只 UA），资源站 WAF 放行
+		Ctx:            ctx,
+		Timeout:        eng.cfg.Timeout,
+		ViewportWidth:  390,
 		ViewportHeight: 844,
 	})
 	sess.RunInitialScripts()
@@ -124,12 +154,12 @@ func (eng *Engine) WEEval(htmlText, pageURL, expr string) (interface{}, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), eng.cfg.Timeout)
 	defer cancel()
 	sess := wgjs.Begin(root, wgjs.Options{
-		PageURL:       pageURL,
-		UserAgent:     eng.cfg.UA,
-		Client:        eng.cfg.HTTP.HTTPClient(),
-		Ctx:           ctx,
-		Timeout:       eng.cfg.Timeout,
-		ViewportWidth: 390,
+		PageURL:        pageURL,
+		UserAgent:      eng.cfg.UA,
+		Client:         lightClientWithUA(eng.cfg.UA, eng.cfg.Timeout), // 轻头（纯 HTTP 只 UA），资源站 WAF 放行
+		Ctx:            ctx,
+		Timeout:        eng.cfg.Timeout,
+		ViewportWidth:  390,
 		ViewportHeight: 844,
 	})
 	sess.RunInitialScripts()
