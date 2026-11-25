@@ -1,15 +1,14 @@
-# MyCast e2e CI（不每次 push 跑，手动触发 + 版本 tag 触发）。
+# MyCast 后端集成 e2e CI —— 纯手动触发（不做自动触发）。
 #
-# 为什么：e2e 测真实窗口渲染（xvfb 虚拟 X）+ WebKitGTK 依赖，慢（~70s）+ 依赖系统库，
-# 不适合每次 push 都跑（黑屏/搜索盲区靠手动/发版时跑）。
+# 重构说明：旧版测 wails3 桌面壳（xvfb 虚拟 X + WebKitGTK + 黑屏检测），依赖 libwebkitgtk/GTK4 系统库。
+# 新路线是 Go 后端 + 嵌入式 JS 引擎 + HTTP-first（WebView 降为 L3 兜底），不再需要 WebKitGTK。
 #
-# 触发：
-#   - workflow_dispatch（Actions 页手动点 Run）。已移除自动触发（不随 push/tag 跑）。
+# 现测跨模块集成（httptest 本地站，无外网依赖，确定性）：
+#   - sniff：L0 纯 HTTP → L2 JS 引擎降级链决策
+#   - jsexec：嵌入式 JS 引擎执行混淆脚本取流（替代旧 WebView 渲染路径）
+#   - httptool：cookie 捕获 + 持久化往返 + http 明文站分流（switchRT）
 #
-# 跑：
-#   - 后端单元测试（go test ./...）
-#   - 模板骨架测试（防黑屏）
-#   - 桌面壳 e2e（xvfb 虚拟 X，窗口渲染非黑 + 搜索 + JS 桥 + 配置 + 日志）
+# 触发：仅在 Actions 页手动点 Run workflow。
 name: e2e
 
 on:
@@ -18,7 +17,7 @@ on:
 jobs:
   e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -29,42 +28,8 @@ jobs:
           go-version: '1.26'
           cache: true
 
-      - name: 安装系统依赖（WebKitGTK 6.0 + GTK4 + xvfb + dbus）
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkitgtk-6.0-dev \
-            libjavascriptcoregtk-6.0-dev \
-            libsoup-3.0-dev \
-            libgtk-4-dev \
-            libgtk-4-1 \
-            xvfb \
-            dbus \
-            xauth \
-            xdotool \
-            imagemagick \
-            dbus-x11
-          # 确认 webkit 6.0 的 .pc 装好（pkg-config 编译 wails3 需要）
-          pkg-config --exists webkitgtk-6.0 && echo "webkitgtk-6.0.pc OK" || echo "警告：webkitgtk-6.0.pc 未找到"
-          pkg-config --exists libsoup-3.0 && echo "libsoup-3.0.pc OK" || echo "警告：libsoup-3.0.pc 未找到"
+      - name: 后端集成 e2e（httptest 本地站，跨 sniff/jsexec/httptool）
+        run: cd go && go test ./internal/e2e/... -v -timeout 120s
 
-      - name: 后端单元测试（含模板骨架，防黑屏）
-        run: |
-          cd go
-          go test ./... -timeout 120s
-
-      - name: 编译桌面壳
-        run: |
-          cd wails3
-          go build -o /tmp/mycast-e2e .
-
-      - name: 桌面壳 e2e（xvfb 虚拟 X，窗口渲染非黑 + 搜索 + JS 桥）
-        run: |
-          cd wails3/e2e
-          # WebKitGTK sandbox（bwrap/xdg-dbus-proxy）在 CI 容器里起不来 → 禁用 sandbox。
-          # （仅 CI 容器内禁用；本地/真机不开这个，安全。）
-          export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
-          export WEBKIT_DISABLE_DMABUF_RENDERER=1
-          export GTK_A11Y=none
-          MYCAST_BIN=/tmp/mycast-e2e xvfb-run -a -s "-screen 0 1280x800x24" dbus-run-session -- \
-            go test -v -run TestE2E -timeout 150s .
+      - name: 交叉编译硬约束抽查（android/arm64 零 CGo）
+        run: cd go && CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build -o /tmp/mycast-android-arm64 ./cmd/mycast

@@ -527,6 +527,16 @@ func (e *Engine) installStubs() error {
 	  eval: function(s) { return eval(s); },
 	};
 	window.self = window; window.top = window; window.parent = window;
+	// 全局别名：真实浏览器里 setTimeout/setInterval 等是全局函数（Window 原型上），
+	// 这里只挂在 window 上，混淆站直接 setTimeout(...) 写 video.src 会 ReferenceError。
+	// 用 var 声明（本函数是全局 eval，var 进 globalThis，后续 script 可见）。
+	var setTimeout = window.setTimeout;
+	var setInterval = window.setInterval;
+	var clearTimeout = window.clearTimeout;
+	var clearInterval = window.clearInterval;
+	var requestAnimationFrame = window.requestAnimationFrame;
+	var cancelAnimationFrame = window.cancelAnimationFrame;
+	var queueMicrotask = window.queueMicrotask;
 	__body.innerHTML = '<div id="root"></div>';
 
 	// console
