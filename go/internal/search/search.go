@@ -12,12 +12,15 @@
 package search
 
 import (
+	"compress/gzip"
+	"compress/zlib"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -27,6 +30,7 @@ import (
 
 	"mycast/internal/httptool"
 
+	"github.com/andybalholm/brotli"
 	xhtml "golang.org/x/net/html"
 )
 
@@ -591,10 +595,29 @@ func walkNodes(n *xhtml.Node, fn func(*xhtml.Node)) {
 
 // readBody 读响应体（限制 4MB 防超大）。
 func readBody(resp *http.Response) string {
+	// 自动解压（impersonate 指纹带 brotli，响应常 Content-Encoding: br；Go 标准库只自动解 gzip）。
+	var rdr io.Reader = resp.Body
+	switch resp.Header.Get("Content-Encoding") {
+	case "br":
+		bdr := brotli.NewReader(resp.Body)
+		rdr = bdr
+	case "gzip":
+		gdr, gerr := gzip.NewReader(resp.Body)
+		if gerr == nil {
+			defer gdr.Close()
+			rdr = gdr
+		}
+	case "deflate":
+		fl, ferr := zlib.NewReader(resp.Body)
+		if ferr == nil {
+			defer fl.Close()
+			rdr = fl
+		}
+	}
 	buf := make([]byte, 0, 1<<20)
 	tmp := make([]byte, 64<<10)
 	for {
-		n, err := resp.Body.Read(tmp)
+		n, err := rdr.Read(tmp)
 		buf = append(buf, tmp[:n]...)
 		if len(buf) > 4<<20 {
 			break
