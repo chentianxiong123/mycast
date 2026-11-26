@@ -58,7 +58,7 @@ type Config struct {
 // Default 默认配置：桌面 Chrome UA + 8s 超时 + 3s 引擎间退避。
 func Default() Config {
 	return Config{
-		UA:      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+		UA:      "Mozilla/5.0 (Linux; Android 13; SM-S9180) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36", // 手机 UA（跟 httptool.DefaultUA 一致；m.baidu.com 移动版要手机 UA）
 		Timeout: 8 * time.Second,
 		Delay:   3 * time.Second,
 	}
@@ -68,6 +68,10 @@ func Default() Config {
 type Aggregator struct {
 	cfg Config
 	hc  *httptool.Client
+
+	// plainHC 裸 http.Client（不用 impersonate/brotli，Go 自动 gzip 解压）。
+	// 搜索（百度/360/搜狗）用它——最早版本能拿数据就是裸 http.Client + 手机 UA。
+	plainHC *http.Client
 
 	// CookieFn 持久化 cookie 提供者（账号固化 cookies/<engine>.json）。
 	// 最稳的方式：带真实登录态 cookie 纯 HTTP 请求（像真人），WebView 仅兜底。
@@ -105,8 +109,9 @@ func New(cfg Config) *Aggregator {
 		panic("search: httptool.New: " + err.Error())
 	}
 	return &Aggregator{
-		cfg: cfg,
-		hc:  hc,
+		cfg:     cfg,
+		hc:      hc,
+		plainHC: &http.Client{Timeout: cfg.Timeout},
 	}
 }
 
@@ -357,7 +362,7 @@ func (a *Aggregator) search360(ctx context.Context, query string) ([]Result, err
 			a.hc.SeedCookies(req.URL.String(), c)
 		}
 	}
-	resp, err := a.hc.Do(req)
+	resp, err := a.plainHC.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("so: %w", err)
 	}
@@ -413,7 +418,7 @@ func (a *Aggregator) soCookieOrWarm(ctx context.Context) string {
 		return ""
 	}
 	a.applyBrowserHeaders(req)
-	resp, err := a.hc.Do(req)
+	resp, err := a.plainHC.Do(req)
 	if err != nil {
 		return ""
 	}
@@ -472,21 +477,26 @@ func parentIsResTitle(n *xhtml.Node) bool {
 // ── 百度（本环境 www.baidu.com tn=json 必 302 验证码，改用移动版 m.baidu.com + data-log）──
 
 func (a *Aggregator) searchBaidu(ctx context.Context, query string) ([]Result, error) {
-	// 移动版 m.baidu.com/s（实测 200，data-log 的 mu 有结果；www tn=json 被验证码拦）
-	u := "https://m.baidu.com/s?word=" + url.QueryEscape(query)
+	// 验证通了的路（2026-11-26）：普通 baidu HTML 搜索（www.baidu.com/s?wd=，不用 tn.json——
+	// tn.json 被 baidu 改成直接验证页），带登录态 BDUSS cookie（CDP 抓 77 条，过 wappass 验证），
+	// 提取 baidu.com/link?url= 跳转链（follow 拿真实 URL）。
+	u := "https://www.baidu.com/s?wd=" + url.QueryEscape(query) + "&rn=20"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("baidu: %w", err)
 	}
-	a.applyBrowserHeaders(req)
-	req.Header.Set("Referer", "https://m.baidu.com/")
-	// 持久化账号固化 cookie 优先（百度验证码 wappass 需 cookie 态）
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+	req.Header.Set("Referer", "https://www.baidu.com/")
+	// 登录态 BDUSS cookie（cookies/baidu.json 固化，CDP 复制 profile 抓的 77 条）
 	if a.CookieFn != nil {
 		if c := a.CookieFn("baidu"); c != "" {
-			a.hc.SeedCookies(req.URL.String(), c)
+			req.Header.Set("Cookie", c)
 		}
 	}
-	resp, err := a.hc.Do(req)
+	// 用裸 client（不 impersonate，避免 baidu 识别爬虫；带 BDUSS cookie 过验证）
+	resp, err := a.plainHC.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("baidu: %w", err)
 	}
@@ -498,32 +508,65 @@ func (a *Aggregator) searchBaidu(ctx context.Context, query string) ([]Result, e
 	if isCaptcha(body) {
 		return nil, fmt.Errorf("baidu: %w", ErrCaptcha)
 	}
-	// data-log='{"mu":"真实URL"}' → mu（兼容单引号）
+	// 提取 baidu.com/link?url= 跳转链（follow 拿真实 URL）
 	var rs []Result
-	for _, m := range reDataLog.FindAllStringSubmatch(body, -1) {
-		mu := baiduMu(m[1])
-		if mu == "" || strings.HasPrefix(mu, "javascript") {
+	seen := map[string]bool{}
+	for _, m := range reBaiduLink.FindAllStringSubmatch(body, -1) {
+		link := m[1]
+		if link == "" || seen[link] {
 			continue
 		}
-		rs = append(rs, Result{Engine: "baidu", URL: mu})
-	}
-	// 百度新版（2026+）：data-log 无 mu，外链全走 baidu.com/link?url= 跳转（要 follow 真实目标）
-	if len(rs) == 0 {
-		for _, m := range reBaiduLink.FindAllStringSubmatch(body, -1) {
-			u := m[1]
-			if u == "" {
-				continue
-			}
-			rs = append(rs, Result{Engine: "baidu", URL: u})
+		seen[link] = true
+		// follow 跳转拿真实 URL（baidu.com/link?url= → 302 → 真实）
+		realURL := a.followBaiduLink(ctx, link)
+		if realURL == "" {
+			realURL = link // follow 失败用跳转链
+		}
+		rs = append(rs, Result{Engine: "baidu", URL: realURL})
+		if len(rs) >= 10 {
+			break
 		}
 	}
 	if len(rs) == 0 {
-		return nil, fmt.Errorf("baidu: 未提取到结果")
+		return nil, fmt.Errorf("baidu: 未提取到结果（验证页?）")
 	}
 	return rs, nil
 }
 
-// baiduMu 从 data-log JSON 取 mu（真实 URL）。
+// followBaiduLink follow baidu.com/link?url= 跳转拿真实 URL。
+func (a *Aggregator) followBaiduLink(ctx context.Context, link string) string {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+link, nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	resp, err := a.plainHC.Do(req)
+	if err != nil {
+		return ""
+	}
+	resp.Body.Close()
+	// baidu.com/link 302 → Location（真实 URL）
+	if resp.StatusCode == 301 || resp.StatusCode == 302 {
+		return resp.Header.Get("Location")
+	}
+	return ""
+}
+
+
+func (a *Aggregator) warmupBaiduCookie(ctx context.Context) {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://image.baidu.com/", nil)
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	if resp, err := a.hc.Do(req); err == nil {
+		resp.Body.Close() // 预热 cookie 进 a.hc 的 cookiejar，tn.json 自动带上
+	}
+}
+
+// unescapeHTML 反转义 HTML 实体（title/abs 里的 &quot; &amp; 等）。
+func unescapeHTML(s string) string {
+	return html.UnescapeString(s)
+}
+
+
 func baiduMu(raw string) string {
 	decoded := html.UnescapeString(raw)
 	var obj struct {
@@ -783,7 +826,7 @@ func (a *Aggregator) searchSogou(ctx context.Context, query string) ([]Result, e
 			a.hc.SeedCookies(req.URL.String(), c)
 		}
 	}
-	resp, err := a.hc.Do(req)
+	resp, err := a.plainHC.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("sogou: %w", err)
 	}

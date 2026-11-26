@@ -20,6 +20,7 @@ require (
 	github.com/dop251/goja v0.0.0-20261121162556-79d6ad37b976 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/ebitengine/purego v0.11.3 // indirect
+	github.com/egoist/mygo v0.10.0 // indirect
 	github.com/evanw/esbuild v0.28.2 // indirect
 	github.com/go-gfx/gfx v0.37.0 // indirect
 	github.com/go-gfx/wgsl v0.4.0 // indirect
