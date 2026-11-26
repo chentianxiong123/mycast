@@ -26,3 +26,5 @@ wails3/app_new
 
 # 编译产物二进制
 wails3/app
+/go/mycast-mygo
+/go/mycast
