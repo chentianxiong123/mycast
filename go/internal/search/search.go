@@ -40,6 +40,7 @@ type Result struct {
 	Title   string `json:"title"`
 	URL     string `json:"url"`
 	Content string `json:"content,omitempty"`
+	IsZiYuan bool  `json:"isZiYuan,omitempty"` // 资源站（vod/tvplay/play/.m3u8 路径，L0 好提流）
 }
 
 // Config 搜索配置。
@@ -508,51 +509,31 @@ func (a *Aggregator) searchBaidu(ctx context.Context, query string) ([]Result, e
 	if isCaptcha(body) {
 		return nil, fmt.Errorf("baidu: %w", ErrCaptcha)
 	}
-	// 提取 baidu.com/link?url= 跳转链（follow 拿真实 URL）
-	var rs []Result
-	seen := map[string]bool{}
-	for _, m := range reBaiduLink.FindAllStringSubmatch(body, -1) {
-		link := m[1]
-		if link == "" || seen[link] {
-			continue
-		}
-		seen[link] = true
-		// follow 跳转拿真实 URL（baidu.com/link?url= → 302 → 真实）
-		realURL := a.followBaiduLink(ctx, link)
-		if realURL == "" {
-			realURL = link // follow 失败用跳转链
-		}
-		rs = append(rs, Result{Engine: "baidu", URL: realURL})
-		if len(rs) >= 10 {
-			break
-		}
+	// 从 baidu 结果页 JSON 提真实资源站 URL（"url":"http://..."，不用 follow baidu.com/link 跳转壳——
+	// 跳转壳命令行 HTTP 404（反爬要真浏览器），但 JSON 里的 "url" 直接给真实资源站 URL（带 BDUSS cookie 过验证后）。
+	rs := searchBaiduJSONURLs(string(body))
+	for i := range rs {
+		rs[i].Engine = "baidu"
 	}
 	if len(rs) == 0 {
-		return nil, fmt.Errorf("baidu: 未提取到结果（验证页?）")
+		return nil, fmt.Errorf("baidu: 未提取到资源站 URL（验证页? 或没带 BDUSS cookie）")
 	}
 	return rs, nil
 }
 
-// followBaiduLink follow baidu.com/link?url= 跳转拿真实 URL。
-func (a *Aggregator) followBaiduLink(ctx context.Context, link string) string {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+link, nil)
-	if err != nil {
-		return ""
+func isZiYuanURL(u string) bool {
+	// 资源站特征：vod/tvplay/play/.m3u8/免费路径（L0 好提流），排除官方（youku/iqiyi/bilibili/tencent）+ 百科/社交。
+	s := strings.ToLower(u)
+	if strings.Contains(s, "baike.baidu.com") || strings.Contains(s, "douyin.com") || strings.Contains(s, "jianshu.com") || strings.Contains(s, "weibo.com") || strings.Contains(s, "fanyi.baidu.com") {
+		return false
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-	resp, err := a.plainHC.Do(req)
-	if err != nil {
-		return ""
+	for _, kw := range []string{"/vod/", "/tvplay/", "/play/", ".m3u8", "vod/", "play/", "tvplay/", "m3u8"} {
+		if strings.Contains(s, kw) {
+			return true
+		}
 	}
-	resp.Body.Close()
-	// baidu.com/link 302 → Location（真实 URL）
-	if resp.StatusCode == 301 || resp.StatusCode == 302 {
-		return resp.Header.Get("Location")
-	}
-	return ""
+	return false
 }
-
-
 func (a *Aggregator) warmupBaiduCookie(ctx context.Context) {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://image.baidu.com/", nil)
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -901,4 +882,34 @@ func (a *Aggregator) searchSogou(ctx context.Context, query string) ([]Result, e
 		return nil, fmt.Errorf("sogou: 未提取到结果")
 	}
 	return rs, nil
+}
+
+// searchBaiduJSONURLs 从 baidu 搜索 HTML 的 JSON 提真实资源站 URL（"url":"http://..."，不用 follow baidu.com/link 跳转壳）。
+// 带 cookie（BDUSS/匿名）过验证后，baidu 1.3MB 结果页的 JSON 里 "url":"http://xajijieshi.com/vodplay/..."（真实资源站 URL）。
+// 正则提 "url":"http://...（非 baidu/非 CDN）+ isZiYuanURL 标记资源站。
+func searchBaiduJSONURLs(body string) []Result {
+	// 提 JSON 的 "url":"http://..."（资源站真实 URL，非 baidu 跳转壳）
+	re := regexp.MustCompile(`"url":"(https?://[^"]+)"`)
+	seen := map[string]bool{}
+	var out []Result
+	for _, m := range re.FindAllStringSubmatch(body, -1) {
+		u := m[1]
+		// 过滤 baidu 内部/CDN（留资源站）
+		if strings.Contains(u, "baidu.com") || strings.Contains(u, "bdstatic") || strings.Contains(u, "bcebos") || strings.Contains(u, "hao123") {
+			continue
+		}
+		if seen[u] {
+			continue
+		}
+		seen[u] = true
+		out = append(out, Result{
+			URL:       u,
+			Title:     "资源站",
+			IsZiYuan:  isZiYuanURL(u),
+		})
+		if len(out) >= 30 {
+			break
+		}
+	}
+	return out
 }

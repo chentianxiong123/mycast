@@ -628,13 +628,16 @@ function renderSearchList() {
   box.innerHTML = '<div class="sres">'+list.map(r => {
     const em = ENGINE_META[r.engine] || {name:r.engine, icon:(r.engine||'?')[0]};
     const desc = r.desc || r.snippet || ''; // 真结果可能无摘要
+    const zy = r.isZiYuan; // 资源站（vodplay/voddetail）→ 可收藏到媒体库（一条路：搜资源站→收藏→媒体库→投屏）
+    const zyMark = zy ? '<span style="color:var(--acc);font-size:12px;margin-left:6px">★</span>' : '';
+    const favBtn = zy ? '<span style="color:var(--acc);font-size:12px;margin-left:8px" onclick="event.stopPropagation();favSearch(\''+r.url.replace(/'/g,"\\'")+\',\''+(r.title||'').replace(/'/g,"\\'")+'\')">＋收藏</span>' : '';
     return '<div class="sx-item">' +
       '<div class="sx-ico">'+em.icon+'</div>' +
       '<div class="sx-main" onclick="pickSite(\''+r.url.replace(/'/g,"\\'")+'\',\''+(r.title||r.url||'').replace(/'/g,"\\'")+'\')">' +
-        '<div class="sx-title">'+(r.title||r.url)+'</div>' +
+        '<div class="sx-title">'+(r.title||r.url)+zyMark+'</div>' +
         '<div class="sx-url">'+r.url+'</div>' +
         (desc ? '<div class="sx-desc">'+escapeHtml(desc)+'</div>' : '') +
-        '<div class="sx-meta"><span class="sx-eng">'+em.name+'</span></div>' +
+        '<div class="sx-meta"><span class="sx-eng">'+em.name+'</span>'+favBtn+'</div>' +
       '</div>' +
     '</div>';
   }).join('')+'</div>';
@@ -1147,13 +1150,28 @@ function searchSites() {
 function escapeHtml(s){ return String(s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function renderSearchRes(box, rs) {
   if(!rs.length) { box.innerHTML = '<div class="warn">无结果</div>'; return; }
-  box.innerHTML = '<div class="sres">'+rs.map(r=>
-    '<div class="sr" onclick="pickSite(\''+r.url.replace(/'/g,"\\'")+'\',\''+(r.title||'').replace(/'/g,"\\'")+'\')">'+
-    '<span class="sr-t">'+(r.title||r.url)+'</span>'+
-    '<span class="sr-u">'+r.url+'</span>'+
-    '<span class="sr-e">'+r.engine+'</span></div>'
+  // 资源站优先排序（isZiYuan 在前，非资源站在后）
+  const sorted = rs.slice().sort((a,b)=>(b.isZiYuan?1:0)-(a.isZiYuan?1:0));
+  const ziyuanCount = rs.filter(r=>r.isZiYuan).length;
+  // 资源站筛选 tab（全部 / 资源站）
+  const filterBar = '<div class="sfilter" style="display:flex;gap:8px;margin-bottom:8px;font-size:12px">'+
+    '<span onclick="filterZiYuan(0,this)" style="cursor:pointer">全部 ('+rs.length+')</span>'+
+    '<span onclick="filterZiYuan(1,this)" style="cursor:pointer;color:#e5b84b">▶ 资源站 ('+ziyuanCount+')</span></div>';
+  box.innerHTML = filterBar + '<div class="sres" id="sresList">'+sorted.map(r=>
+    '<div class="sr" data-zy="'+(r.isZiYuan?1:0)+'" onclick="pickSite(\''+r.url.replace(/'/g,"\\'")+'\',\''+(r.title||'').replace(/'/g,"\\'")+'\')">'+
+    (r.isZiYuan?'<span style="color:#e5b84b;font-size:11px">资源站</span> ':'')+ (r.title?'<span class="sr-t">'+r.title+'</span> ':'')+
+    '<span class="sr-u">'+r.url+'</span>'+ (r.engine?'<span class="sr-e">'+r.engine+'</span>':'')+'</div>'
   ).join('')+'</div>';
+  lastSearchRes = sorted; // 缓存供筛选
 }
+let lastSearchRes = [];
+function filterZiYuan(mode, el) {
+  // mode: 0=全部, 1=只资源站
+  document.querySelectorAll('#sresList .sr').forEach(d=>{ d.style.display = (mode==0 || (mode==1 && d.dataset.zy=="1")) ? '' : 'none'; });
+  document.querySelectorAll('.sfilter span').forEach(s=>{ s.style.color=''; s.style.fontWeight=''; });
+  el.style.color='#e5b84b'; el.style.fontWeight='bold';
+}
+
 function pickSite(u, title) {
   // 方向E：点搜索结果 → 主窗口跳那个真实页（Go 侧 SetURL，跨域能跳）
   fetch('/api/nav?url='+encodeURIComponent(u)).catch(()=>{});
