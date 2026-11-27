@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>MyCast</title>
-<link rel="icon" href="data:,">
+<link rel="icon" type="image/png" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAD80lEQVR4nL2XTWgdVRTHf+femem8V5rYaqu4EuxKitCl1EUtVEWkxC/cWDVIV1Zx05WLdONKcCEBwaoVa0FwEwpSWsUWUSNSKIRgsSpSDLgolqQlL5M3M/e4uHfyPpxnns2LB+4w3Lnn638+7hlREAEF0EOvTyIcQfVB0CaKMAoSFKSFyBzKCTnz7kkABRFlyvDc9SaFPYWNJ3AluDKYNEISwFi/ynyGqDzM5ztbBo4rOadJGxOUWYHmDlEwI16ioLmjzArSxgQ5p+G4ij7z6kvEycfk7RyIR+z3IMqJk5i8/XKEcUehVMRZZDQhX5dULZSKcUcjhD1oIdj/SzuAGLQAYU+EJR19xg1NaYRRqK02BTGg7vbtEzoyBuiIMEFZHbUziOPB3/+NFN9h8gySZKCMgEC/5QZWVuDgAXjycWik3oNhs0TDI8vg7Fdw9ksvQ12dATUCJNTtwf1gDXx9AdIUNBhrjFdSI9DzC6xksO8heHQ/nDvve0GNrxFShwAgQfivv8H7H8D4OJTOf1vJwAikjeBxX55YA4tLcNcO2H1/x6EaCwYgAGv7WxLYcQeMbQMXjHr+Wbh6Fa5c8d42Gj5sznklxoAVzwtgg7xaBGpzgNA+ARxoAVp6CXkOD++Dp5+Cy5fh4gWYn/fx3ro1hEcDTxWy0I71dhAgvFceWIHlZb+/d69f167B7Hcw+z2sroK1/rx0yfrPCNgQtwqNyoPqYnHOewuwa6dfsYG2BoXaqZoNISD0xlDUx9wYWPgDvr0IP87CjRs+BJHxZwYhODQC1b6IFxoJOAUTwS8/w/kv4NIPPvZpCndu70rCwFOFwbgNIFDk0FryKDjnDfpoGsrCl6G1sNqCrEu4MZ6nyDeCAL6ed90NjzwGzWanDEVCpmtvc0JYK8PWMtxzry/PKieGR0A809wlOPAEvPJazaEhKM/hm3MhCalFQPTY5D+3gyO4EraN9xrWbsPkG3Df7s4tJwILv8OH74CNemXdWvKIrI2+vVSPQGWEtbC82GEUgbwNSey/YTvnkwSWl7wBFdQCxFEXf60B61y1cZ9HNoHP3oOx7fRIvrUISeSn3m5SrVXcZ0CF+YDBpPs9MvDXn3B9ofeYsX526B8+apV3dPYNJMMMHgpbYpCkb1u7vB1SDv46zjCS1pXIesw9VPX9YUkEnGYGyzyxUYy6tYax6UsdsVEs8wbVaRIjCOXI/4YG/iVRkhhBdVpUEd56YYax5iFutgoE49vXZpA6FMdYM+Jm6wxvfjohOjVl4KcmjfQUSTRB6aAIl8pIKVxQ1kC7mGElOwwPtEQVEQlz7NsvTiJyhNJtzu+5NXOonpBjn5wEUEX+BnvWw6z3SzcoAAAAAElFTkSuQmCC">
 <script src="/static/hls.min.js"></script>
 <style>
 :root{
@@ -62,7 +62,14 @@ select.inp option{background:var(--card2);color:var(--fg)}
 .ep-cell{height:34px;display:flex;align-items:center;justify-content:center;background:var(--card2);border:1px solid var(--line);border-radius:8px;font-size:11px;font-weight:600;cursor:pointer;user-select:none;transition:all .12s}
 .ep-cell:active{transform:scale(.94)}
 .ep-cell.on{border-color:var(--acc);background:linear-gradient(180deg,rgba(255,77,109,.18),transparent);color:var(--acc)}
-.ep-pager{display:flex;gap:6px;justify-content:center;margin-top:8px;flex-wrap:wrap}
+ .ep-pager{display:flex;gap:6px;justify-content:center;margin-top:8px;flex-wrap:wrap}
+/* 搜索分页（固定卡片底部，不跟结果滚；居中 + 圆角胶囊 + 当前页高亮） */
+.search-pager{display:flex;gap:10px;align-items:center;justify-content:center;margin:14px 0 4px;padding-top:12px;border-top:1px solid var(--line)}
+.search-pager .sp-btn{min-width:60px;height:34px;padding:0 16px;background:var(--card2);border:1px solid var(--line);border-radius:17px;color:var(--fg);font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;justify-content:center}
+.search-pager .sp-btn:active{transform:scale(.96);background:var(--card)}
+.search-pager .sp-btn:disabled{opacity:.3;cursor:default;border-color:transparent}
+.search-pager .sp-cur{font-size:12px;color:var(--dim);min-width:56px;text-align:center}
+.search-pager .sp-cur b{color:var(--acc);font-size:15px;font-weight:700}
 .ep-pg{min-width:30px;height:26px;padding:0 6px;display:flex;align-items:center;justify-content:center;background:var(--card2);border:1px solid var(--line);border-radius:7px;font-size:11px;cursor:pointer}
 .ep-pg.on{border-color:var(--acc);color:var(--acc)}
 .ep-detail{background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:8px;margin-top:8px}
@@ -70,7 +77,7 @@ select.inp option{background:var(--card2);color:var(--fg)}
 .ep-actions{display:flex;gap:8px}
 .ep-actions .btn{flex:1;width:auto;margin-top:0;height:38px;padding:0 10px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;font-size:12px}
 .hidden{display:none}
-.sres{max-height:240px;overflow-y:auto}
+.sres{font-size:13px} /* 结果列表不自己滚，跟整体页滚（只一个滚动条） */
 .sr{display:flex;flex-direction:column;gap:2px;padding:7px 6px;border-bottom:1px solid var(--line);cursor:pointer}
 .sr:hover{background:var(--card2)}
 .sr-t{font-weight:600;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -97,6 +104,25 @@ select.inp option{background:var(--card2);color:var(--fg)}
 
 /* ── 首页：家庭影院 ── */
 .hero-q{font-size:20px;font-weight:800;margin-bottom:10px}
+/* 搜索框：一个圆角容器，里面引擎(左)+输入(中)+搜索按钮(右，框内) */
+.search-box{display:flex;align-items:stretch;background:var(--card2);border:1px solid var(--line);border-radius:14px;height:52px;overflow:hidden;margin-bottom:10px}
+/* 搜索记录（合并进搜索框下方：标题+最近搜过列表，点一下重搜） */
+.search-hist{margin-top:4px}
+.search-hist .sh-title{font-size:12px;font-weight:700;color:var(--dim);margin:12px 0 8px;padding-top:12px;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between}
+.search-hist .sh-clear{background:none;border:none;color:var(--dim);font-size:12px;padding:3px 8px;border-radius:8px;cursor:pointer}
+.search-hist .sh-clear:hover{background:rgba(255,255,255,.08);color:var(--text)}
+.search-hist .sh-empty{font-size:12px;color:var(--dim);padding:8px 0}
+.search-box:focus-within{border-color:var(--acc)}
+/* 引擎选择：清晰可见（不透明底 + 加粗 + 下拉箭头 + 深色 option，WebKit 须 appearance:none 强制） */
+.search-engine{flex:0 0 auto;width:80px;height:100%;background:var(--card);border:none;border-right:1px solid var(--line);color:var(--fg);font-size:13px;font-weight:700;padding:0 24px 0 12px;cursor:pointer;outline:none;appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'><path d='M2 4l3 3 3-3' stroke='%23fff' fill='none' stroke-width='1.5'/></svg>");background-repeat:no-repeat;background-position:right 10px center;background-size:10px}
+.search-engine option{background:var(--card2);color:var(--fg)}
+.search-input{flex:1;min-width:0;height:100%;background:transparent;border:none;color:var(--fg);font-size:15px;padding:0 12px;outline:none}
+.search-input::placeholder{color:var(--dim)}
+/* 搜索按钮：圆形图标（半透明深色底 + 放大镜，hover/active 变 accent，不抢戏） */
+.net-off{position:fixed;left:50%;bottom:96px;transform:translateX(-50%);z-index:999;background:rgba(255,180,60,.16);border:1px solid rgba(255,180,60,.5);color:#ffcf80;padding:6px 14px;border-radius:20px;font-size:12px;white-space:nowrap}
+.search-go{flex:0 0 auto;width:40px;height:40px;margin:6px;background:var(--card);border:none;border-radius:50%;color:var(--dim);font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s}
+.search-go:hover{color:var(--fg);background:var(--card2)}
+.search-go:active{transform:scale(.9);color:var(--acc);background:var(--card)}
 .big-inp{height:46px;font-size:15px;border-radius:12px}
 .big-btn{height:46px;font-size:14px;padding:0 22px;border-radius:12px}
 .banner{margin-bottom:10px}
@@ -267,6 +293,7 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
 .detail-body{flex:1;padding:14px 14px 80px;overflow-y:auto}
 .detail-title{font-size:20px;font-weight:800;margin-bottom:5px}
 .detail-meta{font-size:11px;margin-bottom:12px}
+.detail-meta.fail{color:#ff8a8a;font-size:12px}
 .detail-card{background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:12px}
 .detail-card .row{font-size:12px;line-height:1.7;color:var(--dim);display:flex;gap:6px}
 .detail-card .row .k{color:var(--dim);flex-shrink:0;min-width:32px;opacity:.7}
@@ -309,33 +336,32 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
     <div class="logo">▶</div>
     <div class="hdr-t">
       <h1>MyCast</h1>
-      <div class="sub" id="baseurl">{{.BaseURL}}</div>
     </div>
     <div class="hdr-dot" title="在线"></div>
   </div>
 
   <!-- ═══════════ 首页（家庭影院：搜索 → 选站 → 集数 → 投屏，一条主链路）═══════════ -->
   <div class="page active" id="page-search">
-    <!-- 搜索记录（放上面：打开就能点最近搜的）-->
-    <div class="card">
-      <h2>搜索记录</h2>
-      <div class="recent" id="search-hist"><div class="dim">还没有搜索记录。</div></div>
-    </div>
-
-    <!-- 搜索（妈妈的唯一入口）-->
+    <!-- 搜索（想看什么 card：搜索框 + 搜索记录 + 结果区，全在一个框里）-->
     <div class="card">
       <div class="hero-q">想看什么？</div>
-      <div class="sniffrow">
-        <input class="inp big-inp" id="search-q" value="" placeholder="剧名 / 关键词，如：繁花 在线观看" onkeydown="if(event.key==='Enter')searchSites()">
-        <select class="inp" id="search-engine" style="width:auto;max-width:100px;flex:0 0 auto" title="搜索引擎">
+      <!-- 搜索框：一个圆角容器，里面引擎下拉(左)+输入(中)+搜索按钮(右，框内) -->
+      <div class="search-box">
+        <select class="search-engine" id="search-engine" title="搜索引擎">
           <option value="baidu">百度</option>
           <option value="bing">Bing</option>
           <option value="so">360</option>
           <option value="sogou">搜狗</option>
         </select>
-        <button class="btn pri big-btn" onclick="searchSites()">搜索</button>
+        <input class="search-input" id="search-q" value="" placeholder="剧名 / 关键词，如：繁花" onkeydown="if(event.key==='Enter')mockSearch()">
+        <button class="search-go" onclick="mockSearch()">🔍</button>
       </div>
-      <div id="search-res" class="sniffeps"><div class="dim">搜剧 → 选网站 → 点集数 → 电视开播</div></div>
+      <!-- 搜索结果区 -->
+      <div id="search-res" class="sniffeps"></div>
+      <!-- 分页（结果下方）-->
+      <div id="search-pager" class="search-pager" style="display:none"></div>
+      <!-- 搜索记录（合并进本框，最下面：点一下重搜）-->
+      <div id="search-hist" class="search-hist"></div>
     </div>
 
     <!-- 集数（主链路：点搜索结果后出现）-->
@@ -541,22 +567,82 @@ const ENGINE_META = {
   sogou:{name:'搜狗',   icon:'狗'},
 };
 let srResults = []; // 当前真实搜索结果（/api/search 返回）
+let srPn = 0; // 搜索分页（0 起，下一页+1）
+let srNoMore = false; // 已到最后一页（下一页按钮禁用，不再空搜）
 
-// 真搜索（单引擎 webview 渲染）：读下拉选引擎 → /api/search?engine=xxx → 轮询 /api/search/result
+// 统一 API：带超时 + 明确错误（避免前端一直转圈没反馈）
+async function apiGet(path, timeoutMs=30000) {
+  const ctl = new AbortController();
+  const t = setTimeout(()=>ctl.abort(), timeoutMs);
+  try {
+    const r = await fetch(path, {signal: ctl.signal});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    return await r.json().catch(()=>{ throw new Error('响应解析失败'); });
+  } finally { clearTimeout(t); }
+}
+// 后端断连：只弹一次 toast + 常驻小角标（轮询不刷屏）
+let _netFails = 0, _netRetry = false;
+function netFail(where) {
+  if(_netFails++ === 0) toast(where+'失败，正在重试…', false);
+  let b = document.getElementById('net-off');
+  if(!b) { b=document.createElement('div'); b.id='net-off'; b.className='net-off'; document.body.appendChild(b); }
+  b.textContent = '⚠ 后端连接异常，重试中';
+  // 一次性自动重试：首页不轮询，单次抖动不能让它永久挂着
+  if(!_netRetry) { _netRetry = true; setTimeout(()=>{ _netRetry=false; refresh(); pollPlay(); }, 3000); }
+}
+function netOk() {
+  _netRetry = false;
+  if(_netFails) { _netFails=0; const b=document.getElementById('net-off'); if(b) b.remove(); }
+}
+let srOnlyZiYuan = false; // 前端过滤开关：只看资源站（默认全量）
+
+// 真搜索（单引擎 HTTP）：读下拉选引擎 → /api/search?engine=xxx&pn=0 → 结果 + 分页按钮
 async function mockSearch() {
   const q = document.getElementById('search-q')?.value.trim() || '';
   if(!q) { toast('输入关键词', false); return; }
+  srPn = 0; srNoMore = false; // 新搜索回首页
+  await doSearch(q);
+}
+
+// 实际搜索（带分页）
+async function doSearch(q) {
   const box = document.getElementById('search-res');
   const eng = document.getElementById('search-engine')?.value || 'baidu';
   const em = ENGINE_META[eng] || {name:eng};
-  box.innerHTML = '<div class="dim">'+em.name+' 搜索中…</div>';
+  box.innerHTML = '<div class="dim">'+em.name+' 第 '+(srPn+1)+' 页 搜索中…</div>';
   try {
-    const r = await fetch('/api/search?q='+encodeURIComponent(q)+'&engine='+encodeURIComponent(eng));
-    const d = await r.json();
+    const d = await apiGet('/api/search?q='+encodeURIComponent(q)+'&engine='+encodeURIComponent(eng)+'&pn='+srPn, 40000);
+    netOk();
     if(d.ok && (d.results||[]).length) { showSearchResults(d.results, box); return; }
+    // 空页：标记为最后一页，保留当前页结果（不再递归重搜，也不回退页码）
+    if(srPn > 0) {
+      srNoMore = true;
+      toast('已经是最后一页了', false);
+      if(!srResults.length) box.innerHTML = '<div class="warn">这一页没有结果，点「上一页」返回</div>';
+      else renderSearchList(); // 保留上一页结果 + 禁用下一页
+      return;
+    }
     if(d.need_browser) { box.innerHTML = '<div class="warn">'+escapeHtml(d.msg||'需浏览器渲染')+'</div>'; return; }
-    box.innerHTML = '<div class="warn">'+escapeHtml(d.msg||'搜索失败')+'</div>';
-  } catch(e) { box.innerHTML = '<div class="warn">网络错误: '+escapeHtml(e.message)+'</div>'; }
+    box.innerHTML = '<div class="warn">'+escapeHtml(d.msg||'搜不到结果')+'</div>';
+  } catch(e) {
+    const timeout = /abort/i.test(e.name||'');
+    box.innerHTML = '<div class="warn">'+(timeout?'搜索超时（40s），稍后重试':'网络错误: '+escapeHtml(e.message))+'</div>';
+    netFail('搜索');
+  }
+}
+
+// 前端过滤开关（全量 / 只看资源站，随时开）
+function setSearchFilter(only) { srOnlyZiYuan = !!only; renderSearchList(); }
+
+// 下一页 / 上一页（同一引擎同一关键词）
+function searchNext() {
+  const q=document.getElementById('search-q')?.value.trim()||''; if(!q)return;
+  if(srNoMore) { toast('已经是最后一页了', false); return; }
+  srPn++; doSearch(q);
+}
+function searchPrev() {
+  const q=document.getElementById('search-q')?.value.trim()||''; if(!q)return;
+  if(srPn>0) { srPn--; srNoMore=false; doSearch(q); }
 }
 
 // 显示搜索结果
@@ -570,68 +656,133 @@ function showSearchResults(results, box) {
 function renderSearchList() {
   const box = document.getElementById('search-res');
   if(!box) return;
-  const list = srResults;
-  if(!list.length) { box.innerHTML = '<div class="dim" style="padding:16px 0;text-align:center">没有结果</div>'; return; }
+  let list = srResults;
+  if(srOnlyZiYuan) list = list.filter(r=> r.isZiYuan || /(vod|voddetail|vodplay|tvplay|m3u8)/i.test(r.url||''));
+  if(!list.length) {
+    box.innerHTML = '<div class="dim" style="padding:16px 0;text-align:center">'+
+      (srOnlyZiYuan ? '本页没有资源站结果，点「全部」看全部，或翻页' : '没有结果')+'</div>';
+    return;
+  }
   box.innerHTML = '<div class="sres">'+list.map(r => {
     const em = ENGINE_META[r.engine] || {name:r.engine, icon:(r.engine||'?')[0]};
     const desc = r.desc || r.snippet || ''; // 真结果可能无摘要
     const zy = r.isZiYuan; // 资源站（vodplay/voddetail）→ 可收藏到媒体库（一条路：搜资源站→收藏→媒体库→投屏）
     const zyMark = zy ? '<span style="color:var(--acc);font-size:12px;margin-left:6px">★</span>' : '';
     const favBtn = zy ? '<span style="color:var(--acc);font-size:12px;margin-left:8px" onclick="event.stopPropagation();favSearch(\''+escJS(r.url)+'\',\''+escJS(r.title||'')+'\')">＋收藏</span>' : '';
+    const site = r.content || ''; // 站点名（baidu 标题末段 _xxx）
     return '<div class="sx-item">' +
       '<div class="sx-ico">'+em.icon+'</div>' +
       '<div class="sx-main" onclick="pickSite(\''+r.url.replace(/'/g,"\\'")+'\',\''+(r.title||r.url||'').replace(/'/g,"\\'")+'\')">' +
         '<div class="sx-title">'+(r.title||r.url)+zyMark+'</div>' +
-        '<div class="sx-url">'+r.url+'</div>' +
+        '<div class="sx-url" style="color:var(--acc);font-weight:600">'+(site||em.name)+'</div>' +
         (desc ? '<div class="sx-desc">'+escapeHtml(desc)+'</div>' : '') +
         '<div class="sx-meta"><span class="sx-eng">'+em.name+'</span>'+favBtn+'</div>' +
       '</div>' +
     '</div>';
   }).join('')+'</div>';
+  // 前端过滤开关（结果顶部：全部 / 只看资源站，随时切）
+  let fb=document.getElementById('search-filter');
+  if(!fb){ fb=document.createElement('div'); fb.id='search-filter'; document.getElementById('search-res').insertAdjacentElement('beforebegin',fb); }
+  fb.className='search-pager'; fb.style.display='flex'; fb.style.borderTop='none'; fb.style.marginTop='0';
+  fb.innerHTML='<span class="dim" style="font-size:12px;margin-right:4px">显示</span>'+
+    '<button class="sp-btn" onclick="setSearchFilter(false)"'+(!srOnlyZiYuan?' style="border-color:var(--acc);color:var(--acc)"':'')+'>全部 ('+srResults.length+')</button>'+
+    '<button class="sp-btn" onclick="setSearchFilter(true)"'+(srOnlyZiYuan?' style="border-color:var(--acc);color:var(--acc)"':'')+'>只看资源站</button>';
+  // 分页按钮（独立容器 #search-pager，固定结果下方，不跟结果滚）
+  let pg=document.getElementById('search-pager');
+  if(!pg){ pg=document.createElement('div'); pg.id='search-pager'; document.getElementById('search-res').insertAdjacentElement('afterend',pg); }
+  const em=ENGINE_META[(document.getElementById('search-engine')?.value||'baidu')]||{};
+  pg.className='search-pager';
+  pg.style.display='flex';
+  pg.innerHTML='<button class="sp-btn" onclick="searchPrev()"'+(srPn===0?' disabled':'')+'>← 上一页</button>'+
+    '<span class="sp-cur">第 <b>'+(srPn+1)+'</b> 页 · '+srResults.length+' 条</span>'+
+    '<button class="sp-btn" onclick="searchNext()"'+(srNoMore?' disabled':'')+'>'+(srNoMore?'已是最后一页':'下一页 →')+'</button>';
 }
 function openSearchUrl(u) { window.open(u, '_blank'); }
 
 // ── 账号固化（搜索引擎登录态 cookie 持久化）──
 const SE_ENGINES = [
-  { engine: 'so',    name: '360搜索', url: 'https://www.so.com/' },
-  { engine: 'baidu', name: '百度',    url: 'https://www.baidu.com/' },
-  { engine: 'bing',  name: 'Bing',    url: 'https://www.bing.com/' },
-  { engine: 'sogou', name: '搜狗',    url: 'https://www.sogou.com/' },
+  { engine: 'baidu', name: '百度' },
+  { engine: 'so',    name: '360搜索' },
+  { engine: 'bing',  name: 'Bing' },
+  { engine: 'sogou', name: '搜狗' },
 ];
-// 各引擎登录页（打开后用户登录，登录成功自动收集 cookie）
-const SE_LOGIN = {
-  so:    'https://passport.so.com/login',
-  baidu: 'https://passport.baidu.com/v2/?login',
-  bing:  'https://login.live.com/',
-};
 
+// 百度扫码登录（纯 HTTP，显示二维码 → 手机扫 → 轮询拿 BDUSS 固化）
+let _qrTimer=null;
+async function qrLoginBaidu() {
+  toast('获取扫码中…');
+  try {
+    const d = await (await fetch('/api/login/qrcode')).json();
+    if(!d.ok) { toast(d.msg||'获取二维码失败', false); return; }
+    // 显示二维码（img 加载 d.imgurl）
+    let el=document.getElementById('qr-login-box');
+    if(!el){
+      el=document.createElement('div'); el.id='qr-login-box'; el.className='card';
+      el.style.margin='8px 0';
+      const card=document.getElementById('cookie-list').parentElement; card.appendChild(el);
+    }
+    el.innerHTML='<div style="text-align:center;padding:12px">'+
+      '<img src="/api/login/qrcode/img?sign='+encodeURIComponent(d.sign)+'" style="width:200px;height:200px;border-radius:8px" alt="QR">'+
+      '<div class="dim" id="qr-status" style="margin-top:8px">请用百度 App 扫码…</div></div>';
+    toast('已显示二维码，请扫码');
+    // 轮询 /api/login/poll?sign=xxx 直到 logged_in
+    const sign=d.sign;
+    let tries=0;
+    if(_qrTimer) clearInterval(_qrTimer);
+    _qrTimer=setInterval(async()=>{
+      tries++;
+      try{
+        const p=await (await fetch('/api/login/poll?sign='+encodeURIComponent(sign))).json();
+        const st=document.getElementById('qr-status');
+        if(p.ok&&p.status==='logged_in'){
+          clearInterval(_qrTimer); _qrTimer=null;
+          if(st) st.textContent='✅ 登录成功，BDUSS 已固化';
+          toast('百度登录成功，cookie 已保存');
+          setTimeout(()=>{ if(el) el.innerHTML=''; },2000);
+          loadCookies(); // 刷新状态
+        } else if(p.status==='expired'||tries>120){
+          clearInterval(_qrTimer); _qrTimer=null;
+          if(st) st.textContent='⚠️ 二维码过期，点重新获取';
+          toast('二维码过期', false);
+        } else if(p.status==='scanned'){
+          if(st) st.textContent='已扫码，请在手机上确认…';
+        }
+      }catch(e){}
+    },2000);
+  } catch(e) { toast('扫码失败: '+e.message, false); }
+}
+
+// 查看各引擎 cookie 固化状态（登录一次自动保存，以后搜索自动带上）
 async function loadCookies() {
   try {
     const r = await fetch('/api/cookie/list');
     const d = await r.json();
     const eng = d.engines || {};
+    // baidu 登录态（扫码 BDUSS）
+    let baiduStatus = '未登录';
+    try {
+      const s = await (await fetch('/api/login/status')).json();
+      if(s.ok && s.login_status==='logged_in') baiduStatus = '✅ 已扫码登录（'+(s.cookie_count||0)+' 条）';
+      else if(s.ok && s.cookie_count>0) baiduStatus = '✅ 已固化 '+s.cookie_count+' 条';
+    } catch(e){}
     document.getElementById('cookie-list').innerHTML = SE_ENGINES.map(e=>{
       const n = eng[e.engine] || 0;
+      let sub, btn;
+      if(e.engine==='baidu') {
+        sub = baiduStatus;
+        btn = '<button class="btn pri" style="width:auto;flex-shrink:0;height:32px" onclick="qrLoginBaidu()">扫码登录</button>';
+      } else {
+        sub = n>0 ? ('✅ 已固化 '+n+' 条') : '⚠️ 未固化';
+        btn = '';
+      }
       return '<div class="recent-it">' +
         '<span style="font-size:18px">🔑</span>' +
         '<div class="recent-t"><div class="recent-title">'+e.name+'</div>' +
-        '<div class="recent-sub">'+(n>0?('✅ 已固化 '+n+' 条 cookie'):'⚠️ 未固化（登录后自动保存）')+'</div></div>' +
-        '<button class="btn gh" style="width:auto;flex-shrink:0;height:32px" onclick="loginEngine(\''+e.engine+'\')">去登录</button>' +
+        '<div class="recent-sub">'+sub+'</div></div>' +
+        btn +
         '</div>';
     }).join('');
   } catch(e){ document.getElementById('cookie-list').innerHTML = '<div class="dim">状态加载失败</div>'; }
-}
-
-// 触发登录：App 内打开登录页，用户登录后自动收集固化
-function loginEngine(engine) {
-  const loginURL = SE_LOGIN[engine];
-  if(!loginURL) { toast('无登录页', false); return; }
-  if(window.hc && window.hc.loginEngine) {
-    window.hc.loginEngine(engine, loginURL);
-    toast('已打开 '+engine+' 登录页，登录完自动保存');
-  } else {
-    toast('需 App 内登录（桌面版请手动复制 cookie）', false);
-  }
 }
 
 // ── toast ──
@@ -658,20 +809,36 @@ function sniffURL() {
 // 主链路嗅探：对 URL 提取集数（首页集数卡）+ WebView 兜底
 async function sniff(u, title) {
   if(!u) { toast('请输入链接', false); return; }
-  goPage('home');
-  epLoading('提取集数中…');
+  epLoading('提取集数中…（慢站约 10-15 秒）'); // 原地（#ep-card 在搜索页，不切页）
   try {
-    const r = await fetch('/api/sniff?url='+encodeURIComponent(u));
-    const d = await r.json();
+    const d = await apiGet('/api/sniff?url='+encodeURIComponent(u), 45000);
+    netOk();
     if(d.ok && d.episodes && d.episodes.length) { renderEpsGrid(d.episodes, title || d.url || ''); toast('找到 '+(d.episodes||[]).length+' 集'); return; }
-    if(d.need_browser) {
-      epLoading('检测到 JS 反爬，用内置浏览器打开…');
-      if(window.hc && window.hc.sniffRender) { window.hc.sniffRender(u); pollSniffResult(); }
-      else epLoading('需 App 内打开（桌面版不支持 JS 反爬站）'+(d.msg||''));
-      return;
+    // 失败（/api/sniff 返回 200+ok:false，看 d.ok）——明确反馈
+    if(d.need_browser) { epFail('该站 JS 反爬（需浏览器内核），本路径纯 HTTP 解不了，换一条结果试试'); return; }
+    const m=d.msg||'';
+    if(/connection|refused|dial|timeout|no such host|EOF|no episodes/i.test(m)) {
+      epFail(/no episodes/i.test(m)?'提不出集数（该站结构不识别），换一条结果试试':'该站连不上（可能挂了），换一条结果试试');
+    } else {
+      epFail('提不出（'+(m||'未知')+'），换一条结果试试');
     }
-    epLoading(d.msg||'提取失败');
-  } catch(e) { epLoading('网络错误: '+e.message); }
+  } catch(e) {
+    epFail(/abort/i.test(e.name||'') ? '嗅探超时（45s），换一条结果试试' : '网络错误，换一条结果试试');
+    netFail('嗅探');
+  }
+}
+// 嗅探失败：原地醒目提示（#ep-card 顶部红色条）+ toast
+function epFail(msg) {
+  const c = document.getElementById('ep-card');
+  if(c) {
+    c.classList.remove('hidden');
+    let bar = document.getElementById('ep-fail');
+    if(!bar){ bar=document.createElement('div'); bar.id='ep-fail'; c.insertBefore(bar, c.firstChild); }
+    bar.className='ep-fail-bar';
+    bar.style.cssText='padding:10px 14px;margin-bottom:10px;border-radius:10px;background:rgba(255,80,80,.12);border:1px solid rgba(255,80,80,.35);color:#ff8a8a;font-size:13px;line-height:1.5';
+    bar.innerHTML='<span style="font-weight:700;margin-right:6px">✗</span>'+msg;
+  }
+  toast(msg, false);
 }
 
 // ═══════════ 媒体库（移植 OnScreen UI 结构：继续观看行 + 海报墙）═══
@@ -720,9 +887,11 @@ function posterImg(it, big) {
 
 // 取消收藏
 async function unfav(url) {
-  await fetch('/api/library/fav?unfav=1&url='+encodeURIComponent(url));
-  toast('已取消收藏');
-  loadLibrary();
+  try {
+    const d = await apiGet('/api/library/fav?unfav=1&url='+encodeURIComponent(url));
+    if(d.ok === false) { toast(d.msg||'取消收藏失败', false); return; }
+    toast('已取消收藏'); loadLibrary();
+  } catch(e) { toast('取消收藏失败: '+e.message, false); netFail('取消收藏'); }
 }
 
 function escJS(s) { return String(s).replace(/'/g,"\\'"); }
@@ -748,21 +917,25 @@ function openDetail(url, title) {
 }
 
 async function loadDetail(url, title) {
+  const meta = document.getElementById('detail-meta');
+  meta.classList.remove('fail');
   try {
-    const r = await fetch('/api/sniff?url='+encodeURIComponent(url));
-    const d = await r.json();
+    const d = await apiGet('/api/sniff?url='+encodeURIComponent(url), 45000);
+    netOk();
     if(d.ok && d.episodes && d.episodes.length) {
       renderMedia(d.media);
       renderDetailEps(d.episodes, title||'');
       return;
     }
-    if(d.need_browser) {
-      document.getElementById('detail-meta').textContent = 'JS 反爬，需内置浏览器'+(window.hc? '' : '（桌面版不支持）');
-      if(window.hc && window.hc.sniffRender) { window.hc.sniffRender(url); pollSniffResult(); }
-      return;
-    }
-    document.getElementById('detail-meta').textContent = d.msg||'提取失败';
-  } catch(e) { document.getElementById('detail-meta').textContent = '网络错误: '+e.message; }
+    meta.classList.add('fail');
+    if(d.need_browser) { meta.textContent = '该站 JS 反爬，换一条结果试试'; toast('该站需浏览器内核，换一条', false); return; }
+    meta.textContent = /no episodes/i.test(d.msg||'') ? '提不出集数，换一条结果试试' : (d.msg||'提取失败');
+    toast('提不出集数，换一条结果试试', false);
+  } catch(e) {
+    meta.classList.add('fail');
+    meta.textContent = /abort/i.test(e.name||'') ? '嗅探超时，换一条结果试试' : '网络错误，换一条结果试试';
+    toast(meta.textContent, false); netFail('嗅探');
+  }
 }
 
 // 渲染元数据卡片（学百度：主演/导演/地区/类型分行 + 简介可展开）
@@ -955,20 +1128,27 @@ function getPlayPos(url) {
 }
 
 // 播放指定集（带集数上下文，供上一集/下一集）
+let castBusy = false; // 拿流防重复点击（一次只投一集）
 function playEpLocalCtx(ep, epTitle) {
-  if(!ep) return;
+  if(!ep || castBusy) return;
   selEp = ep;
   const dt = document.getElementById('detail-title');
   const base = (dt && dt.textContent && dt.textContent!=='…') ? dt.textContent : (document.getElementById('ep-title').textContent || '剧集');
   const title = String(base).replace(/\d+集夹$/, '') + ' 第'+ep.index+'集';
-  toast('拿流中…');
-  fetch('/api/cast?url='+encodeURIComponent(ep.url)+'&title='+encodeURIComponent(title))
-    .then(r=>r.json())
+  castBusy = true;
+  const dtl = document.getElementById('ep-dt');
+  if(dtl) dtl.textContent = '拿流中…（正在找 m3u8/mp4）';
+  apiGet('/api/cast?url='+encodeURIComponent(ep.url)+'&title='+encodeURIComponent(title), 35000)
     .then(d=>{
+      castBusy = false; netOk();
       if(d.ok) { autoFav(title, ep.url); playLocal(d.url, d.mime, title, { eps: epsData, index: ep.index }); }
-      else toast(d.msg||'拿流失败', false);
+      else { toast(d.msg||'拿流失败', false); if(dtl) dtl.textContent='拿流失败：'+(d.msg||'未知'); }
     })
-    .catch(e=>toast('错误: '+e.message, false));
+    .catch(e=>{
+      castBusy = false; netFail('拿流');
+      const m = /abort/i.test(e.name||'') ? '拿流超时（35s），换一集或换一条结果' : '拿流网络错误';
+      toast(m, false); if(dtl) dtl.textContent = m;
+    });
 }
 
 function closePlayer() {
@@ -985,21 +1165,10 @@ function epLoading(msg) {
   document.getElementById('ep-pager').innerHTML = '';
   document.getElementById('ep-detail').classList.add('hidden');
 }
-function pollSniffResult() {
-  let tries = 0;
-  const iv = setInterval(async ()=>{
-    tries++;
-    try {
-      const r = await fetch('/api/sniff/result');
-      const d = await r.json();
-      if(d.ok && d.episodes && d.episodes.length) { clearInterval(iv); renderEpsGrid(d.episodes, d.url||''); toast('找到 '+d.episodes.length+' 集'); }
-      else if(tries > 40) { clearInterval(iv); epLoading('提取超时'); }
-    } catch(e) { clearInterval(iv); epLoading('轮询失败: '+e.message); }
-  }, 1000);
-}
 // 集数网格（分页 + 选中 + 投屏）
 function renderEpsGrid(eps, title) {
   epsData = eps; epsPage = 1; selEp = null;
+  const oldFail = document.getElementById('ep-fail'); if(oldFail) oldFail.remove(); // 清掉上次失败提示
   document.getElementById('ep-card').classList.remove('hidden');
   document.getElementById('ep-title').textContent = title || '集数';
   document.getElementById('ep-total').textContent = '共 '+eps.length+' 集';
@@ -1008,8 +1177,8 @@ function renderEpsGrid(eps, title) {
 function drawEpGrid() {
   const start = (epsPage-1)*EPS_PER_PAGE;
   const page = epsData.slice(start, start+EPS_PER_PAGE);
-  document.getElementById('ep-grid').innerHTML = page.map(e=>
-    '<div class="ep-cell'+(selEp && selEp.url===e.url?' on':'')+'" onclick="selectEp('+start+')">'+e.index+'</div>'
+  document.getElementById('ep-grid').innerHTML = page.map((e,i)=>
+    '<div class="ep-cell'+(selEp && selEp.url===e.url?' on':'')+'" onclick="selectEp('+i+')">'+e.index+'</div>'
   ).join('');
   const pages = Math.ceil(epsData.length/EPS_PER_PAGE);
   let pg = '';
@@ -1030,20 +1199,30 @@ function selectEp(idx) {
   document.getElementById('ep-dt').textContent = '第'+e.index+'集 · '+e.title;
 }
 function copyEp() { if(selEp && navigator.clipboard) { navigator.clipboard.writeText(selEp.url); toast('已复制: '+selEp.url); } }
-function playEp() {
-  if(!selEp) return;
+async function playEp() {
+  if(!selEp || castBusy) return;
+  // 先确认已选电视：/api/cast 只负责拿流（本地播放也要用），没电视时后端只记日志，
+  // 前端不能报"已投屏"（假成功）。
+  try {
+    const st = await apiGet('/api/status');
+    if(!st.status || !st.status.tv) { toast('还没选电视，点底部「设备」选一台再投', false); return; }
+  } catch(e) { toast('无法确认电视状态: '+e.message, false); netFail('状态检查'); return; }
   // 标题：详情浮层优先（媒体库点开），否则首页集数卡
   const dt = document.getElementById('detail-title');
   const base = (dt && !dt.classList.contains('hidden') && dt.textContent && dt.textContent!=='…') ? dt.textContent : (document.getElementById('ep-title').textContent || '剧集');
   const title = String(base).replace(/\d+集夹$/, '') + ' 第'+selEp.index+'集';
+  castBusy = true;
   toast('拿流中…');
-  fetch('/api/cast?url='+encodeURIComponent(selEp.url)+'&title='+encodeURIComponent(title))
-    .then(r=>r.json())
+  apiGet('/api/cast?url='+encodeURIComponent(selEp.url)+'&title='+encodeURIComponent(title), 35000)
     .then(d=>{
+      castBusy = false; netOk();
       if(d.ok) { autoFav(title, selEp.url); castPosURL = selEp.url; toast('已投屏第'+selEp.index+'集'); closeDetail(); goPage('dock'); }
-      else toast(d.msg||'拿流失败', false);
+      else toast('拿流失败：'+(d.msg||'未知'), false);
     })
-    .catch(e=>toast('错误: '+e.message, false));
+    .catch(e=>{
+      castBusy = false; netFail('拿流');
+      toast(/abort/i.test(e.name||'') ? '拿流超时（35s），换一集或换一条结果' : '拿流网络错误', false);
+    });
 }
 
 // ── 播放后自动记入媒体库（播放记录归媒体库）──
@@ -1071,75 +1250,50 @@ async function loadSearchHistory() {
 function renderSearchHist(items) {
   const el = document.getElementById('search-hist');
   if(!el) return;
-  if(!items.length) { el.innerHTML = '<div class="dim">还没有搜索记录。</div>'; return; }
-  el.innerHTML = items.map(it=>
+  if(!items.length) { el.innerHTML = ''; return; } // 没记录不显示（合并进框，空就藏）
+  el.innerHTML = '<div class="sh-title"><span>最近搜过</span><button class="sh-clear" onclick="clearSearchHistory()">清空</button></div>'+ items.map(it=>
     '<div class="recent-it" onclick="rerunSearch(\''+it.query.replace(/'/g,"\\'")+'\')">'+
-    '<span style="font-size:18px">🔍</span>'+
-    '<div class="recent-t"><div class="recent-title">'+it.query+'</div><div class="recent-sub">'+it.time+' · 点一下重搜</div></div>'+
+    '<span style="font-size:15px">🔍</span>'+
+    '<div class="recent-t"><div class="recent-title">'+it.query+'</div><div class="recent-sub">'+it.time+'</div></div>'+
     '<span class="recent-go">›</span></div>'
   ).join('');
 }
 function rerunSearch(q) {
   document.getElementById('search-q').value = q;
-  searchSites();
+  mockSearch();
 }
-
-// ── 方向E：搜索直接真跳搜索引擎（百度/360/Bing/搜狗 真结果页），不模板回显 ──
-function searchSites() {
-  const q = document.getElementById('search-q').value.trim();
-  if(!q) { toast('请输入关键词', false); return; }
-  const eng = document.getElementById('search-engine').value;
-  const urls = { baidu:'https://www.baidu.com/s?wd=', bing:'https://www.bing.com/search?q=', so:'https://www.so.com/s?q=', sogou:'https://www.sogou.com/web?query=' };
-  const base = urls[eng] || urls.baidu;
-  // Go 侧 mainWin.SetURL 导航（跨域 location.href 不生效，必须走 Go）
-  fetch('/api/nav?url='+encodeURIComponent(base + encodeURIComponent(q))).catch(()=>{});
+async function clearSearchHistory() {
+  try {
+    await fetch('/api/search/history/clear');
+    renderSearchHist([]);
+    toast('搜索记录已清空');
+  } catch(e) { toast('清空失败: '+e.message, false); }
 }
 function escapeHtml(s){ return String(s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-function renderSearchRes(box, rs) {
-  if(!rs.length) { box.innerHTML = '<div class="warn">无结果</div>'; return; }
-  // 资源站优先排序（isZiYuan 在前，非资源站在后）
-  const sorted = rs.slice().sort((a,b)=>(b.isZiYuan?1:0)-(a.isZiYuan?1:0));
-  const ziyuanCount = rs.filter(r=>r.isZiYuan).length;
-  // 资源站筛选 tab（全部 / 资源站）
-  const filterBar = '<div class="sfilter" style="display:flex;gap:8px;margin-bottom:8px;font-size:12px">'+
-    '<span onclick="filterZiYuan(0,this)" style="cursor:pointer">全部 ('+rs.length+')</span>'+
-    '<span onclick="filterZiYuan(1,this)" style="cursor:pointer;color:#e5b84b">▶ 资源站 ('+ziyuanCount+')</span></div>';
-  box.innerHTML = filterBar + '<div class="sres" id="sresList">'+sorted.map(r=>
-    '<div class="sr" data-zy="'+(r.isZiYuan?1:0)+'" onclick="pickSite(\''+r.url.replace(/'/g,"\\'")+'\',\''+(r.title||'').replace(/'/g,"\\'")+'\')">'+
-    (r.isZiYuan?'<span style="color:#e5b84b;font-size:11px">资源站</span> ':'')+ (r.title?'<span class="sr-t">'+r.title+'</span> ':'')+
-    '<span class="sr-u">'+r.url+'</span>'+ (r.engine?'<span class="sr-e">'+r.engine+'</span>':'')+'</div>'
-  ).join('')+'</div>';
-  lastSearchRes = sorted; // 缓存供筛选
-}
-let lastSearchRes = [];
-function filterZiYuan(mode, el) {
-  // mode: 0=全部, 1=只资源站
-  document.querySelectorAll('#sresList .sr').forEach(d=>{ d.style.display = (mode==0 || (mode==1 && d.dataset.zy=="1")) ? '' : 'none'; });
-  document.querySelectorAll('.sfilter span').forEach(s=>{ s.style.color=''; s.style.fontWeight=''; });
-  el.style.color='#e5b84b'; el.style.fontWeight='bold';
-}
-
 function pickSite(u, title) {
-  // 方向E：点搜索结果 → 主窗口跳那个真实页（Go 侧 SetURL，跨域能跳）
-  fetch('/api/nav?url='+encodeURIComponent(u)).catch(()=>{});
+  // 点搜索结果 → 原地嗅探集数（HTTP-first 链路）：资源站 → /api/sniff → 集数网格 → 投屏
+  // 不切页（#ep-card 在 #page-search，原地显示，不 goPage('home'——没有 page-home）
+  if(!u) return;
+  sniff(u, title||u);
 }
 
 // ── 电视选择 ──
 function selectTV(name) {
   toast('正在选择 '+name+'…');
-  fetch('/api/tv/select?name='+encodeURIComponent(name)).then(r=>r.json()).then(d=>{
+  apiGet('/api/tv/select?name='+encodeURIComponent(name), 15000).then(d=>{
+    netOk();
     if(d.ok) { toast('已选择 '+d.tv); goPage('home'); }
     else toast(d.msg||'选择失败', false);
     refresh();
-  });
+  }).catch(e=>{ toast('选择电视失败: '+e.message, false); netFail('选择电视'); });
 }
 
 function rescan() {
   toast('扫描中…');
-  fetch('/api/tv/scan').then(r=>r.json()).then(()=>{
-    toast('扫描完成');
+  apiGet('/api/tv/scan', 20000).then(d=>{
+    netOk(); toast('扫描完成'+(d.tvs?('，发现 '+d.tvs.length+' 台'):''));
     refresh();
-  });
+  }).catch(e=>{ toast('扫描失败: '+e.message, false); netFail('扫描'); });
 }
 
 // ── 工具 ──
@@ -1284,16 +1438,20 @@ function pollPlay() {
       if(!isNaN(v)) { document.getElementById('d-vol').value = v; volPreview(v); }
     }
 
-    // 首页小卡
-    document.getElementById('st-playing').textContent = p.title || '—';
-    document.getElementById('st-playing').className = 'sv ' + (playing?'ok':'dim');
-    document.getElementById('st-speed').textContent = p.speed > 0 ? p.speed.toFixed(0)+' KB/s' : '—';
+    // 首页小卡（老版卡片已删，元素不存在就跳过——别让它抛异常被 catch 吞成"后端断连"）
+    const sp = document.getElementById('st-playing');
+    if(sp) { sp.textContent = p.title || '—'; sp.className = 'sv ' + (playing?'ok':'dim'); }
+    const ss = document.getElementById('st-speed');
+    if(ss) ss.textContent = p.speed > 0 ? p.speed.toFixed(0)+' KB/s' : '—';
 
     // 首页投屏横幅（正在播放 → 可点进遥控器）
     const bn = document.getElementById('cast-banner');
-    if(playing) { bn.classList.remove('hidden'); document.getElementById('cb-title').textContent = p.title||'正在播放'; }
-    else bn.classList.add('hidden');
-  }).catch(()=>{});
+    if(bn) {
+      if(playing) { bn.classList.remove('hidden'); const ct=document.getElementById('cb-title'); if(ct) ct.textContent = p.title||'正在播放'; }
+      else bn.classList.add('hidden');
+    }
+    netOk();
+  }).catch(()=>netFail('播放状态'));
 }
 let volDragging = false;
 
@@ -1304,15 +1462,18 @@ function refresh() {
 
     // tv
     const tvEl = document.getElementById('st-tv');
-    if(s.tv) { tvEl.textContent = s.tv; tvEl.className='sv ok'; }
-    else { tvEl.textContent = '未选择'; tvEl.className='sv warn'; }
+    if(tvEl) {
+      if(s.tv) { tvEl.textContent = s.tv; tvEl.className='sv ok'; }
+      else { tvEl.textContent = '未选择'; tvEl.className='sv warn'; }
+    }
 
     // 首页 hero
     const heroT = document.getElementById('hero-t');
     const heroS = document.getElementById('hero-s');
     const heroB = document.getElementById('hero-badge');
     const heroI = document.getElementById('hero-ic');
-    if(s.ses_title) {
+    if(!(heroT && heroS && heroB && heroI)) { /* 老版首页 hero 已删，跳过 */ }
+    else if(s.ses_title) {
       heroI.textContent = '📺';
       heroT.textContent = s.ses_title;
       heroS.textContent = '正在投屏到 ' + (s.tv || '电视');
@@ -1329,15 +1490,19 @@ function refresh() {
       heroB.textContent = '● 就绪'; heroB.className = 'hero-badge idle';
     }
 
-    document.getElementById('dock-sub').textContent = '目标电视：' + (s.tv || '未选择');
+    const ds = document.getElementById('dock-sub');
+    if(ds) ds.textContent = '目标电视：' + (s.tv || '未选择');
 
     // err
     const ew = document.getElementById('errbar');
-    if(s.last_err) { ew.textContent = s.last_err; ew.classList.remove('hidden'); }
-    else ew.classList.add('hidden');
+    if(ew) {
+      if(s.last_err) { ew.textContent = s.last_err; ew.classList.remove('hidden'); }
+      else ew.classList.add('hidden');
+    }
 
     renderBubbles(d.tvs||[], s.tv, s.ses_title);
-  }).catch(()=>{});
+    netOk();
+  }).catch(()=>netFail('状态刷新'));
 }
 
 function renderBubbles(tvs, selected, playingTitle) {
@@ -1400,9 +1565,12 @@ function toggleLogPause() {
   document.getElementById('log-pause-btn').textContent = logPaused ? '▶' : '⏸';
 }
 async function clearLogs() {
-  try { await fetch('/api/logs/clear'); } catch(e){} // 真清空：调后端清 logFile（旧实现只清 DOM → 假清空）
-  document.getElementById('log-list').innerHTML = '<div class="dim">已清空（新日志仍会继续追加）</div>';
-  lastLogs = [];
+  try {
+    const d = await apiGet('/api/logs/clear');
+    if(d.ok === false) { toast(d.msg||'清空失败', false); return; }
+    document.getElementById('log-list').innerHTML = '<div class="dim">已清空（新日志仍会继续追加）</div>';
+    lastLogs = [];
+  } catch(e) { toast('清空日志失败: '+e.message, false); netFail('清空日志'); }
 }
 
 // ── 搜索引擎开关 ──

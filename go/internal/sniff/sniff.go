@@ -64,6 +64,9 @@ func Default() Config {
 		UA:      "Mozilla/5.0 (Linux; Android 13; SM-S9180) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36",
 		Referer: "",
 		Timeout: 15 * time.Second,
+		// L2 兜底：L0（纯 HTTP 正则）提不到集数/流时，用嵌入式 JS 引擎跑页面脚本。
+		// 零 CGO（quickjs + go-webengine），仅失败时才启动，不拖慢正常站。
+		EnableJS: true,
 		// 常见播放页路径（macCMS/苹果CMS/神马/自建系各变体）
 		PlayPath: []string{
 			"/play/", "/vodplay/", "/episode/", "/ep/",
@@ -152,6 +155,9 @@ func (e *Extractor) Fetch(rawURL string) (string, error) {
 	req.Header.Set("User-Agent", ua)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+	// e.hc 是 httptool 的裸 *http.Client（impersonate transport），它自己加 br 但不解压 →
+	// 上层拿到压缩乱码（sikastone 只有 42KB 二进制，L0/L2 全灭）。显式 identity 拿明文。
+	req.Header.Set("Accept-Encoding", "identity")
 	req.Header.Set("Upgrade-Insecure-Requests", "1")
 	// Referer：显式配置优先，否则默认详情页自身域名（防盗链常校验 Referer 同源）。
 	if e.cfg.Referer != "" {
@@ -658,7 +664,6 @@ func inPlaylistContainer(a *html.Node, markers []string) bool {
 }
 
 // ErrNeedsBrowser 页面需要浏览器内核（JS 挑战/指纹反爬），纯 HTTP 拿不到。
-// ErrNeedsBrowser 页面需要浏览器内核（JS 挑战/指纹反爬）。
 // L2（嵌入式 JS 引擎）也拿不到时才抛这个错 → 落到 L3 WebView 兜底。
 var ErrNeedsBrowser = errors.New("页面需要浏览器内核（JS 反爬挑战），L0/L2 均未命中，请走 L3 WebView 兜底")
 
@@ -668,16 +673,106 @@ func (e *Extractor) ExtractURL(rawURL string) ([]Episode, error) {
 	if err != nil {
 		return nil, err
 	}
-	// 已知正版平台（B站/优酷/爱奇艺/腾讯/芒果/搜狐/抖音等）不是盗版站，不走 WebView 兜底
-	if !isLegitDomain(rawURL) && NeedsBrowser(htmlText) {
-		return nil, ErrNeedsBrowser
-	}
+	// L0：纯 HTTP HTML 提集数
 	eps := e.Extract(CleanAds(htmlText), rawURL)
+	// L0.5 快路：详情页本身没集数列表（macCMS 神马影院等），只有"立即播放"入口，
+	// 真集数列表在播放页。先跟进（纯 HTTP，快），再考虑 L2 JS 渲染（慢）。
 	if len(eps) == 0 {
+		eps = e.followPlayEntry(htmlText, rawURL)
+	}
+	// L2：仍没提到（集数由 JS 动态生成）→ 用嵌入式 JS 引擎跑页面脚本，
+	// 把渲染后真 DOM 再交给 L0 提取器兜底。
+	if len(eps) == 0 && e.cfg.EnableJS {
+		if rendered := e.renderEpisodesJS(htmlText, rawURL); rendered != "" {
+			eps = e.Extract(CleanAds(rendered), rawURL)
+			if len(eps) == 0 {
+				eps = e.followPlayEntry(rendered, rawURL)
+			}
+		}
+	}
+	if len(eps) == 0 {
+		// 已知正版平台（B站/优酷/爱奇艺/腾讯/芒果/搜狐/抖音等）不是盗版站，不走 WebView 兜底
+		if !isLegitDomain(rawURL) && NeedsBrowser(htmlText) {
+			return nil, ErrNeedsBrowser
+		}
 		return nil, errors.New("no episodes found")
 	}
 	SortEpisodes(eps)
 	return eps, nil
+}
+
+// followPlayEntry 详情页没集数列表时的通用兜底：找"立即播放/开始播放"入口，
+// 跟进播放页提集数（macCMS 神马影院 /sip/<id>-1-1.html 这类）。不写死站点。
+func (e *Extractor) followPlayEntry(htmlText, rawURL string) []Episode {
+	// 播放页专用提取器：放宽 PlayPath（神马 /sip/ 等详情页海报角标也带"第N集"，
+	// 不能全局放宽，否则误抓海报；只在跟进取到的播放页上放宽）。
+	subCfg := e.cfg
+	subCfg.PlayPath = append(append([]string(nil), e.cfg.PlayPath...), "/sip/", "/playpage/")
+	sub := &Extractor{cfg: subCfg, hc: e.hc, hx: e.hx}
+	doc, err := html.Parse(strings.NewReader(htmlText))
+	if err != nil {
+		return nil
+	}
+	base, _ := url.Parse(rawURL)
+	var candidates []string
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode && n.Data == "a" {
+			href := getAttr(n, "href")
+			text := stripPUA(strings.TrimSpace(nodeText(n)))
+			if href != "" && !strings.HasPrefix(href, "javascript") && !strings.HasPrefix(href, "#") {
+				if rePlayEntry.MatchString(text) {
+					if full := resolveHref(base, href); full != "" && full != rawURL {
+						candidates = append(candidates, full)
+					}
+				}
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(doc)
+	for _, entry := range candidates {
+		subHTML, ferr := e.Fetch(entry)
+		if ferr != nil {
+			continue
+		}
+		eps := sub.Extract(CleanAds(subHTML), entry)
+		if len(eps) == 0 && e.cfg.EnableJS {
+			eng, jerr := jsexec.New(e.cfg.JSEngine)
+			if jerr == nil {
+				if rendered := eng.WERenderedHTML(subHTML, entry); rendered != "" {
+					eps = sub.Extract(CleanAds(rendered), entry)
+				}
+				eng.Close()
+			}
+		}
+		if len(eps) > 0 {
+			return eps
+		}
+	}
+	return nil
+}
+
+// renderEpisodesJS L2 集数兜底：JS 引擎跑页面脚本 → 真 DOM 序列化 → 交给 Extract 提集数。
+// 只在 L0 空结果时调用（不拖慢绝大多数正常站）。零 CGO，Android 可跑。
+func (e *Extractor) renderEpisodesJS(htmlText, rawURL string) string {
+	cfg := e.cfg.JSEngine
+	cfg.BaseURL = rawURL
+	if cfg.UA == "" {
+		cfg.UA = e.cfg.UA
+	}
+	if cfg.Timeout == 0 {
+		cfg.Timeout = e.cfg.Timeout
+	}
+	cfg.HTTP = e.hx
+	eng, err := jsexec.New(cfg)
+	if err != nil {
+		return ""
+	}
+	defer eng.Close()
+	return eng.WERenderedHTML(htmlText, rawURL)
 }
 
 // DetectVideoPage 三路启发式：不写死站点列表，判定"这个页面是不是影视详情页（需要提取集数）"。
@@ -871,6 +966,9 @@ func nodeText(n *html.Node) string {
 
 // 集数文字正则（宽）：第N集 / N集 / 第N期 / 全集 / 正片 / 番外 / 特辑。
 var reEPNum = regexp.MustCompile(`第\s*\d+\s*[集期话]|\d+\s*集|全集|正片|番外|特辑`)
+
+// rePlayEntry 播放入口文字（详情页只有它、没有集数列表时跟进去）。
+var rePlayEntry = regexp.MustCompile(`^\s*(立即播放|马上播放|开始播放|点击播放|在线播放|播放全集|观看全集|正片播放|全集播放|播放)\s*$`)
 
 // reEPNumDigit 提取集数数字：第N集 / 第N期 / N集 / 第N话。
 var reEPNumDigit = regexp.MustCompile(`第\s*(\d+)\s*[集期话]|(\d+)\s*集`)

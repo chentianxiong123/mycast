@@ -7,12 +7,16 @@
 package main
 
 import (
+	_ "embed"
 	"log"
 
 	"github.com/egoist/mygo"
 
 	"mycast/internal/server"
 )
+
+//go:embed icon.png
+var appIcon []byte
 
 func main() {
 	// ① mycast 的 HTTP server（跟纯 HTTP 路同一个）
@@ -26,7 +30,7 @@ func main() {
 
 	// ③ 起 mygo 主窗口（mycast UI）
 	mygo.App.WhenReady(func() {
-		mygo.NewWindow(mygo.WindowOptions{
+		win := mygo.NewWindow(mygo.WindowOptions{
 			Title:     "MyCast",
 			Width:     960,
 			Height:    720,
@@ -35,6 +39,12 @@ func main() {
 			StateKey:  "main",
 			URL:       "app://localhost/",
 		})
+		// 窗口图标（Linux X11 taskbar 显示）
+		if len(appIcon) > 0 {
+			if err := win.SetIcon(appIcon); err != nil {
+				log.Printf("mycast-mygo: SetIcon: %v", err)
+			}
+		}
 	})
 
 	// ④ cookie 登录走百度扫码 HTTP（internal/baidulogin），不靠 mygo WebView 弹窗口

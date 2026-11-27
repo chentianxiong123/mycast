@@ -44,21 +44,14 @@ const Port = "18080"
 type Instance struct {
 	Handler http.Handler
 	BaseURL string
+	DataDir string
 	Relay   *relay.Relay
 	Sniff   *sniff.Extractor
 	Search  *search.Aggregator
 
-	// WebView 兜底回传结果（JS 拿 outerHTML → POST /api/sniff/render → 这里存）
-	sniffMu     sync.Mutex
-	sniffResult []sniff.Episode
-	sniffURL    string
-	sniffMedia  map[string]meta.Media // 异步抓的封面/元数据（url→media）
-
-	// WebviewRender 宿主注入（sniff L3 兜底：渲染盗版站详情页，回传 outerHTML）。
-	// 降级链：L0 纯 HTTP+正则 → L1 NeedsBrowser 特征 → L2 嵌入式 JS 引擎（jsexec）
-	// → L3 WebView 兜底。L2 已经能解 JS 混淆取流，所以这组只剩
-	// 真·DOM 渲染 / canvas·WebGL 指纹站才会走到。
-	WebviewRender func(url string)
+	// 异步封面/元数据缓存（url→media）
+	sniffMu    sync.Mutex
+	sniffMedia map[string]meta.Media
 
 	// 最近在看（历史记录，最多 5 条）
 	recentMu   sync.Mutex
@@ -80,6 +73,7 @@ type SearchItem struct {
 
 // recordSearch 记一条搜索历史（同关键词去重置顶，截断 8 条）。
 func (inst *Instance) recordSearch(q string) {
+	Logf("[recordSearch] q=%s DataDir=%s", q, inst.DataDir)
 	if q == "" {
 		return
 	}
@@ -94,6 +88,33 @@ func (inst *Instance) recordSearch(q string) {
 		out = append(out, it)
 	}
 	inst.searchHist = out
+	// 落盘（持久化，重启不丢）
+	if inst.DataDir != "" {
+		_ = os.MkdirAll(inst.DataDir, 0o755) // 确保数据目录存在
+		data, _ := json.Marshal(out)
+		if err := os.WriteFile(filepath.Join(inst.DataDir, "search-hist.json"), data, 0o644); err != nil {
+			Logf("[search-hist] 落盘失败: %v", err)
+		} else {
+			Logf("[search-hist] 落盘成功: %s (%d 条)", filepath.Join(inst.DataDir, "search-hist.json"), len(out))
+		}
+	}
+}
+
+// loadSearchHist 启动时加载搜索记录（持久化）
+func (inst *Instance) loadSearchHist() {
+	if inst.DataDir == "" {
+		return
+	}
+	data, err := os.ReadFile(filepath.Join(inst.DataDir, "search-hist.json"))
+	if err != nil {
+		return
+	}
+	var items []SearchItem
+	if json.Unmarshal(data, &items) == nil {
+		inst.recentMu.Lock()
+		inst.searchHist = items
+		inst.recentMu.Unlock()
+	}
 }
 
 // Options 装配选项
@@ -138,6 +159,7 @@ func New(opts Options) *Instance {
 	}
 	inst := &Instance{
 		BaseURL: baseURL,
+		DataDir: dataDir,
 		Relay:   rl,
 		Sniff:   sniff.New(sniff.Default()),
 	}
@@ -147,6 +169,7 @@ func New(opts Options) *Instance {
 	inst.Search.CookieFn = inst.Cookies.HeaderString
 	// cookie 通过 Options.CookieFn 传入（库无状态，不持 CookieFn 字段）
 	inst.Library = NewLibrary(dataDir)
+	inst.loadSearchHist() // 启动加载搜索记录（持久化）
 
 	mux := http.NewServeMux()
 	tpl := template.Must(template.ParseFS(tplFS, "web/templates/*.html"))
@@ -281,55 +304,17 @@ func New(opts Options) *Instance {
 		writeJSON(w, map[string]any{"ok": true, "items": items})
 	})
 
-	// WebView 兜底回传：JS 拿 outerHTML（挑战完成后）→ POST 这里 → 解析存结果
-	mux.HandleFunc("/api/sniff/render-launch", func(w http.ResponseWriter, rq *http.Request) {
-		u := rq.URL.Query().Get("url")
-		if u == "" {
-			writeJSON(w, map[string]any{"ok": false, "msg": "缺少 url"})
-			return
+	// 清空搜索历史（内存 + 落盘文件一起清，重启不会复活）
+	mux.HandleFunc("/api/search/history/clear", func(w http.ResponseWriter, _ *http.Request) {
+		inst.recentMu.Lock()
+		inst.searchHist = nil
+		inst.recentMu.Unlock()
+		if inst.DataDir != "" {
+			if err := os.Remove(filepath.Join(inst.DataDir, "search-hist.json")); err != nil && !os.IsNotExist(err) {
+				Logf("[search-hist] 清除失败: %v", err)
+			}
 		}
-		LogInfo("[sniff] WebView 兑底渲染 url=%s", u)
-		if inst.WebviewRender != nil {
-			inst.WebviewRender(u) // 桌面壳：子窗口渲染详情页 → outerHTML POST /api/sniff/render
-			writeJSON(w, map[string]any{"ok": true, "msg": "rendering"})
-			return
-		}
-		writeJSON(w, map[string]any{"ok": false, "msg": "WebView 渲染不可用"})
-	})
-
-	mux.HandleFunc("/api/sniff/render", func(w http.ResponseWriter, rq *http.Request) {
-		if rq.Method != http.MethodPost {
-			writeJSON(w, map[string]any{"ok": false, "msg": "需要 POST"})
-			return
-		}
-		rq.ParseForm()
-		htmlText := rq.PostFormValue("html")
-		u := rq.PostFormValue("url")
-		if htmlText == "" {
-			writeJSON(w, map[string]any{"ok": false, "msg": "缺少 html"})
-			return
-		}
-		eps := inst.Sniff.Extract(htmlText, u)
-		inst.sniffMu.Lock()
-		inst.sniffResult = eps
-		inst.sniffURL = u
-		inst.sniffMu.Unlock()
-		if len(eps) == 0 {
-			writeJSON(w, map[string]any{"ok": true, "episodes": 0, "msg": "no episodes found"})
-			return
-		}
-		writeJSON(w, map[string]any{"ok": true, "episodes": len(eps)})
-	})
-
-	// 前端轮询拿 WebView 兜底结果（读后清空）
-	mux.HandleFunc("/api/sniff/result", func(w http.ResponseWriter, _ *http.Request) {
-		inst.sniffMu.Lock()
-		eps := inst.sniffResult
-		u := inst.sniffURL
-		inst.sniffResult = nil
-		inst.sniffURL = ""
-		inst.sniffMu.Unlock()
-		writeJSON(w, map[string]any{"ok": true, "url": u, "episodes": eps})
+		writeJSON(w, map[string]any{"ok": true})
 	})
 
 	mux.HandleFunc("/api/search", func(w http.ResponseWriter, rq *http.Request) {
@@ -339,41 +324,34 @@ func New(opts Options) *Instance {
 			return
 		}
 		// HTTP-first：纯 HTTP 搜搜索引擎（baidu 带 BDUSS 过验证 → JSON 直解资源站 URL）
-		enabled := search.EnabledEngines()      // 配置开关
-		engName := rq.URL.Query().Get("engine") // 用户选的引擎（单引擎）
+			engName := rq.URL.Query().Get("engine") // 用户选的引擎（单引擎）
 		if engName == "" {
 			engName = "baidu" // 默认
 		}
+		pn := 0
+		if pv := rq.URL.Query().Get("pn"); pv != "" {
+			n, _ := strconv.Atoi(pv)
+			pn = n
+		}
 		start := time.Now()
-		LogInfo("[search] q=%s engine=%s 开始（HTTP-first）", q, engName)
+		LogInfo("[search] q=%s engine=%s pn=%d 开始（HTTP-first）", q, engName, pn)
+		inst.recordSearch(q) // 记历史（不管成败，用户搜了就记）
 		// HTTP 搜索（纯 Go，不靠 WebView）
-		rs, err := inst.Search.Search(rq.Context(), q)
+		rs, err := inst.Search.SearchOne(rq.Context(), q, engName, pn)
 		if err != nil {
 			LogWarn("[search] q=%s 失败 err=%v 耗时=%s", q, err, time.Since(start).Round(time.Millisecond))
 			needBrowser := errors.Is(err, search.ErrCaptcha)
 			writeJSON(w, map[string]any{"ok": false, "msg": err.Error(), "need_browser": needBrowser, "query": q})
 			return
 		}
-		// 按启用引擎过滤（config 控制所有路径）
-		if enabled != nil {
-			en := map[string]bool{}
-			for _, e := range enabled {
-				en[e] = true
-			}
-			var f []search.Result
-			for _, r := range rs {
-				if en[r.Engine] {
-					f = append(f, r)
-				}
-			}
-			rs = f
-		}
-		inst.recordSearch(q)
+		// 后端全量返回（不过滤）——过滤放前端（开关随时开）
 		if len(rs) == 0 {
 			LogWarn("[search] q=%s 结果=0（引擎有结果但全被过滤/触发验证码）", q)
-		} else {
-			LogInfo("[search] q=%s via=http 结果=%d 耗时=%s", q, len(rs), time.Since(start).Round(time.Millisecond))
+			// 搜不到就报错（前端显示明确提示），不再静默返回空
+			writeJSON(w, map[string]any{"ok": false, "msg": "搜不到结果（未登录 BDUSS 或引擎被拦），请先扫码登录", "query": q})
+			return
 		}
+		LogInfo("[search] q=%s via=http 结果=%d 耗时=%s", q, len(rs), time.Since(start).Round(time.Millisecond))
 		writeJSON(w, map[string]any{"ok": true, "query": q, "results": rs})
 	})
 
@@ -386,6 +364,30 @@ func New(opts Options) *Instance {
 			return
 		}
 		writeJSON(w, map[string]any{"ok": true, "imgurl": qr.ImgURL, "sign": qr.Sign})
+	})
+
+	// 二维码图片代理（带 BDUSS cookie 抓 baidu 二维码 PNG，前端 img 走这个绕过跨域+cookie）
+	mux.HandleFunc("/api/login/qrcode/img", func(w http.ResponseWriter, rq *http.Request) {
+		sign := rq.URL.Query().Get("sign")
+		if sign == "" {
+			http.Error(w, "缺少 sign", http.StatusBadRequest)
+			return
+		}
+		u := "https://passport.baidu.com/v2/api/qrcode?sign=" + sign + "&lp=pc"
+		req, _ := http.NewRequestWithContext(rq.Context(), "GET", u, nil)
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+		if c := inst.Cookies.HeaderString("baidu"); c != "" {
+			req.Header.Set("Cookie", c)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Cache-Control", "max-age=10")
+		_, _ = io.Copy(w, resp.Body)
 	})
 	mux.HandleFunc("/api/login/poll", func(w http.ResponseWriter, rq *http.Request) {
 		sign := rq.URL.Query().Get("sign")
@@ -413,6 +415,17 @@ func New(opts Options) *Instance {
 		_ = inst.Cookies.Save("baidu", []CookieEntry{{Name: "BDUSS", Value: res.BDUSS, Domain: ".baidu.com", Path: "/"}})
 		LogInfo("[login] 百度扫码登录成功，BDUSS 已固化")
 		writeJSON(w, map[string]any{"ok": true, "status": 2, "bduss": res.BDUSS[:8] + "..."})
+	})
+
+	// 登录状态（前端查看 baidu 是否已固化 BDUSS）
+	mux.HandleFunc("/api/login/status", func(w http.ResponseWriter, _ *http.Request) {
+		engines := inst.Cookies.List()
+		n := engines["baidu"]
+		status := "logged_out"
+		if n > 0 {
+			status = "logged_in"
+		}
+		writeJSON(w, map[string]any{"ok": true, "login_status": status, "cookie_count": n})
 	})
 
 	// ── 账号固化（cookie 持久化）：登录后自动收集，WebView 搜索/嗅探时注入 ──
@@ -700,7 +713,7 @@ func (inst *Instance) posterProxy(w http.ResponseWriter, rq *http.Request) {
 	_, _ = io.Copy(w, resp.Body)
 }
 
-// configPath 搜索配置路径（与 search/browser.go 同路径）。
+// configPath 搜索配置路径（config.json）。
 const configPath = "/mnt/shared/mycast/config.json"
 
 // defaultConfig 默认配置：三引擎全开（百度验证码时 bing/so 兜底，避免 0 结果）。

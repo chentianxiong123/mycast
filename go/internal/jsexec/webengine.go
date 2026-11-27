@@ -100,6 +100,32 @@ func (eng *Engine) WEResolveStream(htmlText, pageURL string) (stream string, glo
 	return stream, globals, nil
 }
 
+// WERenderedHTML 执行页面 JS 后把真 DOM 序列化回 HTML（L2 集数兜底用）。
+// 苹果CMS eval(history_get) 这类站，集数 <a> 是 JS 动态生成的，纯 HTTP 的 HTML 里没有；
+// 跑完脚本再 OuterHTML，就能交给 L0 的 <a href> 提取器再提一次。
+func (eng *Engine) WERenderedHTML(htmlText, pageURL string) string {
+	root, err := dom.Parse(htmlText)
+	if err != nil {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), eng.cfg.Timeout)
+	defer cancel()
+	sess := wgjs.Begin(root, wgjs.Options{
+		PageURL:        pageURL,
+		UserAgent:      eng.cfg.UA,
+		Client:         lightClientWithUA(eng.cfg.UA, eng.cfg.Timeout),
+		Ctx:            ctx,
+		Timeout:        eng.cfg.Timeout,
+		ViewportWidth:  390,
+		ViewportHeight: 844,
+	})
+	sess.RunInitialScripts()
+	sess.RunPending()
+	sess.DispatchLifecycle()
+	// root 是 document 节点（OuterHTML 对 document 返回空），InnerHTML 才是整页序列化。
+	return dom.InnerHTML(root)
+}
+
 // WEExtractMeta 用 go-webengine 执行 JS + Eval 取元数据（主演/导演/地区...）。
 func (eng *Engine) WEExtractMeta(htmlText, pageURL string) map[string]interface{} {
 	root, err := dom.Parse(htmlText)

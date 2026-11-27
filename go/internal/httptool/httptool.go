@@ -180,8 +180,10 @@ func (c *Client) applyHeaders(req *http.Request) {
 	h.Set("User-Agent", c.cfg.UA)
 	h.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
 	h.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-	// 不显式设 Accept-Encoding：Go http.Transport 只在未设时自动加 gzip + 自动解压。
-	// 显式设 → Go 不解压 → 拿到压缩字节解析失败（同 search.go 踩过的 152KB 无结果坑）。
+	// 必须显式 identity：impersonate.ChromeAndroid transport 会自己加 br/gzip 但
+	// **不自动解压** → 上层拿到压缩字节乱码（sikastone 42KB 二进制，L0/L2 全提不出集数）。
+	// 设 identity 后服务端发明文，上层 gzip 兼容分支留着兜底。
+	h.Set("Accept-Encoding", "identity")
 	h.Set("Upgrade-Insecure-Requests", "1")
 	h.Set("Connection", "keep-alive")
 	h.Set("Sec-Fetch-Dest", "document")

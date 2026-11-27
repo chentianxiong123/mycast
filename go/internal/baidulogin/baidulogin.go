@@ -81,7 +81,12 @@ func (c *Client) GetQRCode(ctx context.Context) (*QRCode, error) {
 	if r.Errno != 0 || r.Sign == "" {
 		return nil, fmt.Errorf("getqrcode errno=%d", r.Errno)
 	}
-	return &QRCode{ImgURL: r.ImgURL, Sign: r.Sign}, nil
+	// imgurl 可能相对（passport.baidu.com/...），补全 https://
+	imgurl := r.ImgURL
+	if !strings.HasPrefix(imgurl, "http://") && !strings.HasPrefix(imgurl, "https://") {
+		imgurl = "https://" + imgurl
+	}
+	return &QRCode{ImgURL: imgurl, Sign: r.Sign}, nil
 }
 
 // Poll 轮询扫码状态。返回 (临时BDUSS, 状态, error)。

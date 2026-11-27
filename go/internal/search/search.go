@@ -16,6 +16,7 @@ import (
 	"compress/zlib"
 	"context"
 	"encoding/base64"
+	"strconv"
 	"log"
 	"encoding/json"
 	"errors"
@@ -120,15 +121,33 @@ func New(cfg Config) *Aggregator {
 // Search 聚合搜索：bing → so → baidu，去重，返回结果。
 // 每个引擎失败（验证码/网络/空结果）自动换下一个；全部失败返回聚合错误。
 func (a *Aggregator) Search(ctx context.Context, query string) ([]Result, error) {
-	// 并发跑所有引擎（提速：4 引擎同时，不再串行 + 退避）
-	engines := []struct {
+	// 全引擎聚合（mcp/默认），首页
+	return a.SearchOne(ctx, query, "", 0)
+}
+
+// SearchOne 单引擎搜索（engine 空 = 全引擎聚合；非空只跑那个引擎；pn 分页 0 起）。
+func (a *Aggregator) SearchOne(ctx context.Context, query, engine string, pn int) ([]Result, error) {
+	// 选了就只跑那个引擎（不聚合）；engine 空才跑全部
+	allEngines := []struct {
 		name string
-		fn   func(context.Context, string) ([]Result, error)
+		fn   func(context.Context, string, int) ([]Result, error)
 	}{
 		{"bing", a.searchBing},
 		{"so", a.search360},
 		{"baidu", a.searchBaidu},
 		{"sogou", a.searchSogou},
+	}
+	engines := allEngines
+	if engine != "" {
+		engines = nil
+		for _, e := range allEngines {
+			if e.name == engine {
+				engines = append(engines, e)
+			}
+		}
+		if len(engines) == 0 {
+			return nil, fmt.Errorf("未知引擎: %s", engine)
+		}
 	}
 	type engRes struct {
 		name string
@@ -139,9 +158,9 @@ func (a *Aggregator) Search(ctx context.Context, query string) ([]Result, error)
 	for _, eng := range engines {
 		go func(eng struct {
 			name string
-			fn   func(context.Context, string) ([]Result, error)
+			fn   func(context.Context, string, int) ([]Result, error)
 		}) {
-			rs, err := eng.fn(ctx, query)
+			rs, err := eng.fn(ctx, query, pn)
 			ch <- engRes{eng.name, rs, err}
 		}(eng)
 	}
@@ -262,8 +281,8 @@ func isCaptcha(body string) bool {
 
 // ── Bing（学 SearXNG：www.bing.com/search + base64url 解码）──
 
-func (a *Aggregator) searchBing(ctx context.Context, query string) ([]Result, error) {
-	u := "https://www.bing.com/search?q=" + url.QueryEscape(query)
+func (a *Aggregator) searchBing(ctx context.Context, query string, pn int) ([]Result, error) {
+	u := "https://www.bing.com/search?q=" + url.QueryEscape(query) + "&first=" + strconv.Itoa(pn*10+1)
 	resp, err := a.get(ctx, u, "https://www.bing.com/")
 	if err != nil {
 		return nil, fmt.Errorf("bing: %w", err)
@@ -344,12 +363,12 @@ func bingRealURL(href string) string {
 
 // ── 360（本环境 www.so.com 强制 302→m.so.com，用移动版 m.so.com + XPath 标题）──
 
-func (a *Aggregator) search360(ctx context.Context, query string) ([]Result, error) {
+func (a *Aggregator) search360(ctx context.Context, query string, pn int) ([]Result, error) {
 	// 预热拿 cookie（SearXNG get_cookie 思路）
 	a.soCookieOrWarm(ctx)
 	// 实测：m.so.com 302（手机 UA/移动版反爬），www.so.com + 桌面 UA 200 出真结果。
 	// 手机「很容易验证码 360」根因 = 360 对移动端点/UA 302→验证码，桌面端点+桌面 UA 正常。
-	u := "https://www.so.com/s?q=" + url.QueryEscape(query)
+	u := "https://www.so.com/s?q=" + url.QueryEscape(query) + "&pn=" + strconv.Itoa(pn*10)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("so: %w", err)
@@ -478,11 +497,13 @@ func parentIsResTitle(n *xhtml.Node) bool {
 
 // ── 百度（本环境 www.baidu.com tn=json 必 302 验证码，改用移动版 m.baidu.com + data-log）──
 
-func (a *Aggregator) searchBaidu(ctx context.Context, query string) ([]Result, error) {
+func (a *Aggregator) searchBaidu(ctx context.Context, query string, pn int) ([]Result, error) {
 	// 验证通了的路（2026-11-26）：普通 baidu HTML 搜索（www.baidu.com/s?wd=，不用 tn.json——
 	// tn.json 被 baidu 改成直接验证页），带登录态 BDUSS cookie（CDP 抓 77 条，过 wappass 验证），
 	// 提取 baidu.com/link?url= 跳转链（follow 拿真实 URL）。
-	u := "https://www.baidu.com/s?wd=" + url.QueryEscape(query) + "&rn=20"
+	// rn=10 + pn=页号*10（对齐 SearXNG：results_per_page=10, pn=(pageno-1)*10）。
+	// 之前 rn=20 但 pn 步进 10 → 相邻页重叠一半，页数全乱。
+	u := "https://www.baidu.com/s?wd=" + url.QueryEscape(query) + "&rn=10&pn=" + strconv.Itoa(pn*10)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("baidu: %w", err)
@@ -515,14 +536,14 @@ func (a *Aggregator) searchBaidu(ctx context.Context, query string) ([]Result, e
 	if isCaptcha(body) {
 		return nil, fmt.Errorf("baidu: %w", ErrCaptcha)
 	}
-	// 从 baidu 结果页 JSON 提真实资源站 URL（"url":"http://..."，不用 follow baidu.com/link 跳转壳——
-	// 跳转壳命令行 HTTP 404（反爬要真浏览器），但 JSON 里的 "url" 直接给真实资源站 URL（带 BDUSS cookie 过验证后）。
+	// 从 baidu 结果页 JSON 提真实 URL（"url":"http://..."，不用 follow baidu.com/link 跳转壳）。
+	// 找到什么返回什么（不过滤），isZiYuan 只标记不过滤（前端标★，不剔除）。
 	rs := searchBaiduJSONURLs(string(body))
 	for i := range rs {
 		rs[i].Engine = "baidu"
 	}
 	if len(rs) == 0 {
-		return nil, fmt.Errorf("baidu: 未提取到资源站 URL（验证页? 或没带 BDUSS cookie）")
+		return nil, fmt.Errorf("baidu: 未提取到 URL（验证页? 或没带 BDUSS cookie）")
 	}
 	return rs, nil
 }
@@ -800,8 +821,8 @@ func IsLegitSite(rawURL string) bool { return isLegitSite(rawURL) }
 
 // searchSogou 搜狗搜索（sogou.com）。页面结构：.vrwrap > .vr-title > a，或 h3 > a。
 // 链接常为 sogou 跳转 /link?url=xxx（保留原样，前端/嗅探 follow）。
-func (a *Aggregator) searchSogou(ctx context.Context, query string) ([]Result, error) {
-	u := "https://www.sogou.com/web?query=" + url.QueryEscape(query)
+func (a *Aggregator) searchSogou(ctx context.Context, query string, pn int) ([]Result, error) {
+	u := "https://www.sogou.com/web?query=" + url.QueryEscape(query) + "&page=" + strconv.Itoa(pn+1)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("sogou: %w", err)
@@ -894,28 +915,52 @@ func (a *Aggregator) searchSogou(ctx context.Context, query string) ([]Result, e
 // 带 cookie（BDUSS/匿名）过验证后，baidu 1.3MB 结果页的 JSON 里 "url":"http://xajijieshi.com/vodplay/..."（真实资源站 URL）。
 // 正则提 "url":"http://...（非 baidu/非 CDN）+ isZiYuanURL 标记资源站。
 func searchBaiduJSONURLs(body string) []Result {
-	// 提 JSON 的 "url":"http://..."（资源站真实 URL，非 baidu 跳转壳）
-	re := regexp.MustCompile(`"url":"(https?://[^"]+)"`)
-	seen := map[string]bool{}
+	// 带 BDUSS 登录态时，baidu 结果页 JSON 里 "title":"..." 跟 "url":"http://真实站" 配对
+	// （直接给资源站真实 URL + 完整标题，不用 baidu.com/link 跳转壳——命令行解不开）。
+	// 同站去重（同域名多条算一条）。全量返回（不过滤）。
+	re := regexp.MustCompile(`"title":"([^"]{4,60})"\s*[,}]*\s*"url":"(https?://[^"]+)"`)
+	// 全量逐条（跟 SearXNG 一致：不去重同站，xaruihu 9 条集数都保留）
+	seenURL := map[string]bool{} // 只去重完全相同的 URL（baidu JSON 同一 url 出现多次）
 	var out []Result
 	for _, m := range re.FindAllStringSubmatch(body, -1) {
-		u := m[1]
-		// 过滤 baidu 内部/CDN（留资源站）
-		if strings.Contains(u, "baidu.com") || strings.Contains(u, "bdstatic") || strings.Contains(u, "bcebos") || strings.Contains(u, "hao123") {
+		title, u := m[1], m[2]
+		// 排除 baidu 内部/CDN
+		if strings.Contains(u, "baidu.com") || strings.Contains(u, "bdstatic") || strings.Contains(u, "bcebos") || strings.Contains(u, "hao123") || strings.Contains(u, "passport.baidu") {
 			continue
 		}
-		if seen[u] {
+		// 完全相同 URL 去重（baidu JSON 同 url 重复），不同集数（同站不同 url）保留
+		if seenURL[u] {
 			continue
 		}
-		seen[u] = true
+		seenURL[u] = true
+		// 站点名（标题末段 _xxx）
+		host := u
+		if i := strings.Index(u, "//"); i >= 0 {
+			rest := u[i+2:]
+			if j := strings.Index(rest, "/"); j >= 0 {
+				host = rest[:j]
+			} else {
+				host = rest
+			}
+		}
+		site := strings.TrimPrefix(host, "m.")
+		if parts := strings.Split(title, "_"); len(parts) >= 2 {
+			if s2 := strings.TrimSpace(parts[len(parts)-1]); s2 != "" {
+				site = s2
+			}
+		}
 		out = append(out, Result{
-			URL:       u,
-			Title:     "资源站",
-			IsZiYuan:  isZiYuanURL(u),
+			URL:     u,
+			Title:   title,
+			Content: site,
 		})
-		if len(out) >= 30 {
-			break
-		}
 	}
-	return out
+	return out // 全量（不再截断 20 条）
+}
+
+// stripTags 去 HTML 标签（保留文本）。
+func stripTags(s string) string {
+	re := regexp.MustCompile(`<[^>]*>`)
+	s = re.ReplaceAllString(s, "")
+	return strings.TrimSpace(s)
 }
