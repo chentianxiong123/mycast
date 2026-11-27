@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"mycast/internal/baidulogin"
 	"mycast/internal/bili"
 	"mycast/internal/mcp"
 	"mycast/internal/media"
@@ -51,35 +52,13 @@ type Instance struct {
 	sniffMu     sync.Mutex
 	sniffResult []sniff.Episode
 	sniffURL    string
-
-	// 纯页面渲染通道（L3）：点击搜索结果 → 子 WebView 渲染真实页 → outerHTML 存这，
-	// 前端直接显示（不归一化/不去广告）
-	pageMu      sync.Mutex
-	pageHTML    string
-	pageURL     string
-	pageIsVideo bool            // 方向B：DetectVideoPage 判断（点结果→识别影视页）
-	pageEps     []sniff.Episode // 方向B：提取的集数（识别并套进去）
+	sniffMedia  map[string]meta.Media // 异步抓的封面/元数据（url→media）
 
 	// WebviewRender 宿主注入（sniff L3 兜底：渲染盗版站详情页，回传 outerHTML）。
 	// 降级链：L0 纯 HTTP+正则 → L1 NeedsBrowser 特征 → L2 嵌入式 JS 引擎（jsexec）
-	// → L3 WebView 兜底（下面这组）。L2 已经能解 JS 混淆取流，所以这组只剩
+	// → L3 WebView 兜底。L2 已经能解 JS 混淆取流，所以这组只剩
 	// 真·DOM 渲染 / canvas·WebGL 指纹站才会走到。
 	WebviewRender func(url string)
-	// PageRender 纯页面渲染（点击搜索结果 → 渲染真实页，回传 outerHTML，不归一化/不去广告）。
-	PageRender func(url string)
-	// PageInject 方向C：可见 WebView 打开目标站 + 直接注入 JS（去广告/归一化/集数提取），不回传。
-	PageInject func(url string)
-	// Nav 主窗口导航（Go 侧 mainWin.SetURL，跨域 location.href 不生效，必须走 Go）。
-	Nav func(url string)
-	// SearchWebviewRender 搜索渲染（Hidden 子 WebView 窗口渲染引擎页，JS 抓结构化结果 → 导航回传）。
-	// 桌面 wails3 壳注入；nil=HTTP 后备（Android 无窗口时）。
-	SearchWebviewRender func(url string)
-
-	// 搜索 WebView 兜底（搜索引擎 JS 渲染/验证码时，WebView 渲染结果页再解析）
-	searchMu     sync.Mutex
-	searchResult []search.Result
-	searchQuery  string
-	searchEngine string
 
 	// 最近在看（历史记录，最多 5 条）
 	recentMu   sync.Mutex
@@ -170,9 +149,23 @@ func New(opts Options) *Instance {
 	inst.Library = NewLibrary(dataDir)
 
 	mux := http.NewServeMux()
-	// 根路径重定向 /ui（已砍 renderer 的 DLNA 接收端，根路径无设备描述）
+	tpl := template.Must(template.ParseFS(tplFS, "web/templates/*.html"))
+	// 根路径直接返回 UI（mygo 自定义 scheme 不自动跟随 302 重定向，会显示 Found 白屏）
 	mux.HandleFunc("/", func(w http.ResponseWriter, rq *http.Request) {
-		http.Redirect(w, rq, "/ui", http.StatusFound)
+		// 直接返回 UI（mygo 自定义 scheme 不自动跟随 302 重定向，会显示 Found 白屏）
+		if rq.URL.Path == "/" {
+			w.Header().Set("Cache-Control", "no-store, max-age=0")
+			w.Header().Set("Pragma", "no-cache")
+			data := map[string]any{
+				"BaseURL": baseURL,
+				"Status":  rl.Status(),
+				"TVs":     tvList(),
+				"Logs":    rl.GetLogs(),
+			}
+			_ = tpl.ExecuteTemplate(w, "index.html", data)
+			return
+		}
+		http.NotFound(w, rq)
 	})
 	// mock 影视详情页（方向B 测试：模拟 sandat 结构：video meta + playlist 容器 + 集数链接）。
 	// 不依赖真实站，验证 点结果→子窗口渲染→DetectVideoPage→Extract→显示集数 链路。
@@ -233,15 +226,22 @@ func New(opts Options) *Instance {
 			return
 		}
 		Logf("[sniff] 成功 url=%s 集数=%d", u, len(eps))
-		// 抓封面图 + 元数据（学百度 App 干净卡片：主演/导演/地区/年份/简介）
-		media := meta.Media{}
-		if htmlText, ferr := e.Fetch(u); ferr == nil {
-			media = meta.FromHTML(htmlText)
-			if media.Poster == "" {
-				media.Poster = e.ExtractPoster(htmlText, u)
+		// 先返回集数（快），封面/元数据异步补（不阻塞）
+		writeJSON(w, map[string]any{"ok": true, "url": u, "episodes": eps})
+		// 后台抓封面 + 元数据（慢，不阻塞响应）
+		go func() {
+			if htmlText, ferr := e.Fetch(u); ferr == nil {
+				media := meta.FromHTML(htmlText)
+				if media.Poster == "" {
+					media.Poster = e.ExtractPoster(htmlText, u)
+				}
+				// 存到 inst.sniffMedia[u] 供后续 /api/sniff/media 取（或前端二次拉）
+				inst.sniffMu.Lock()
+				if inst.sniffMedia == nil { inst.sniffMedia = map[string]meta.Media{} }
+				inst.sniffMedia[u] = media
+				inst.sniffMu.Unlock()
 			}
-		}
-		writeJSON(w, map[string]any{"ok": true, "url": u, "episodes": eps, "poster": media.Poster, "media": media})
+		}()
 	})
 
 	// 盗版站闭环：播放页 URL → 拿流(m3u8/mp4) → 投屏。妈妈操作 2 的最后一段。
@@ -332,224 +332,21 @@ func New(opts Options) *Instance {
 		writeJSON(w, map[string]any{"ok": true, "url": u, "episodes": eps})
 	})
 
-	// ═══════════ 主窗口导航（方向E：真跳搜索引擎/影视站，Go 侧 SetURL）═══
-	mux.HandleFunc("/api/nav", func(w http.ResponseWriter, rq *http.Request) {
-		u := rq.URL.Query().Get("url")
-		if u == "" {
-			writeJSON(w, map[string]any{"ok": false, "msg": "缺少 url"})
-			return
-		}
-		if inst.Nav != nil {
-			inst.Nav(u) // Go 侧 mainWin.SetURL（跨域 location.href 不生效，必须走 Go）
-			writeJSON(w, map[string]any{"ok": true})
-			return
-		}
-		writeJSON(w, map[string]any{"ok": false, "msg": "无壳导航"})
-	})
-
-	// ═══════════ 纯页面渲染通道（先不归一化/不去广告，直接渲染搜索结果真实页面）═══
-	// render-launch：触发子 WebView 渲染任意 URL（桌面壳注入 WebviewRender）
-	mux.HandleFunc("/api/page/render-launch", func(w http.ResponseWriter, rq *http.Request) {
-		u := rq.URL.Query().Get("url")
-		if u == "" {
-			writeJSON(w, map[string]any{"ok": false, "msg": "缺少 url"})
-			return
-		}
-		if inst.PageRender != nil {
-			go inst.PageRender(u) // 子窗口渲染 → outerHTML POST /api/page/render（方向B）
-			writeJSON(w, map[string]any{"ok": true, "msg": "rendering"})
-			return
-		}
-		if inst.WebviewRender != nil {
-			go inst.WebviewRender(u)
-			writeJSON(w, map[string]any{"ok": true, "msg": "rendering (sniff)"})
-			return
-		}
-		writeJSON(w, map[string]any{"ok": false, "msg": "WebView 渲染不可用"})
-	})
-
-	// inject-launch：方向C 可见 WebView 打开目标站 + 直接注入 JS（去广告/归一化/集数提取），不回传。
-	mux.HandleFunc("/api/page/inject-launch", func(w http.ResponseWriter, rq *http.Request) {
-		u := rq.URL.Query().Get("url")
-		if u == "" {
-			writeJSON(w, map[string]any{"ok": false, "msg": "缺少 url"})
-			return
-		}
-		if inst.PageInject != nil {
-			go inst.PageInject(u)
-			writeJSON(w, map[string]any{"ok": true, "msg": "injecting"})
-			return
-		}
-		writeJSON(w, map[string]any{"ok": false, "msg": "无壳注入"})
-	})
-
-	// render：子窗口 outerHTML 回传，原样存（不 Extract，保留页面结构）。
-	// 兼容 POST body（Android Java 回传）和 GET 导航回传（桌面壳 location.href ?url=&html=）。
-	mux.HandleFunc("/api/page/render", func(w http.ResponseWriter, rq *http.Request) {
-		htmlText := rq.URL.Query().Get("html")
-		u := rq.URL.Query().Get("url")
-		if htmlText == "" && rq.Method == http.MethodPost {
-			rq.ParseForm()
-			htmlText = rq.PostFormValue("html")
-			u = rq.PostFormValue("url")
-		}
-		if htmlText == "" {
-			writeJSON(w, map[string]any{"ok": false, "msg": "缺少 html"})
-			return
-		}
-		inst.pageMu.Lock()
-		inst.pageHTML = htmlText
-		inst.pageURL = u
-		// 方向B：判断影视页 + 提取集数（识别并套进去）。DetectVideoPage 三路启发式（不写死站点）。
-		ex := sniff.New(sniff.Default())
-		inst.pageIsVideo = ex.DetectVideoPage(u, htmlText)
-		inst.pageEps = nil
-		if inst.pageIsVideo {
-			clean := sniff.CleanAds(htmlText) // 去广告（归一化）
-			eps := ex.Extract(clean, u)       // 提取集数
-			sniff.SortEpisodes(eps)           // 排序归一化
-			inst.pageEps = eps
-		}
-		inst.pageMu.Unlock()
-		LogInfo("[page/render] 收到 outerHTML url=%s 大小=%d", u, len(htmlText))
-		writeJSON(w, map[string]any{"ok": true, "size": len(htmlText), "url": u})
-	})
-
-	// result：前端轮询拿渲染后的页面 HTML（读后清空）
-	mux.HandleFunc("/api/page/result", func(w http.ResponseWriter, _ *http.Request) {
-		inst.pageMu.Lock()
-		htmlText := inst.pageHTML
-		u := inst.pageURL
-		isVideo := inst.pageIsVideo
-		eps := inst.pageEps
-		inst.pageHTML = ""
-		inst.pageURL = ""
-		inst.pageIsVideo = false
-		inst.pageEps = nil
-		inst.pageMu.Unlock()
-		if htmlText == "" {
-			writeJSON(w, map[string]any{"ok": false, "rendering": true})
-			return
-		}
-		// 方向B：返回 is_video + 集数（识别则前端套进去，非影视则导航真实页）
-		writeJSON(w, map[string]any{"ok": true, "url": u, "is_video": isVideo, "episodes": eps})
-	})
-
-	// 搜索盗版站（bing/360/百度 聚合，接 /api/sniff 提取集数）
-	mux.HandleFunc("/api/search/render", func(w http.ResponseWriter, rq *http.Request) {
-		// Hidden 子窗口 JS 抓结构化结果 → 导航回传（GET ?engine=x&data=<urlencoded JSON>，绕开 mixed content）
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		if rq.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		engine := rq.URL.Query().Get("engine")
-		data := rq.URL.Query().Get("data") // 结构化结果 JSON（[{title,url,desc}]）
-		// 兼容：POST body（Android Java 回传 JSON）
-		if rq.Method == http.MethodPost {
-			b, _ := io.ReadAll(rq.Body)
-			data = string(b)
-		}
-		if data == "" {
-			writeJSON(w, map[string]any{"ok": false, "msg": "缺少 data"})
-			return
-		}
-		// 解析结构化结果 JSON
-		var items []struct {
-			Title string `json:"title"`
-			URL   string `json:"url"`
-			Desc  string `json:"desc"`
-		}
-		if err := json.Unmarshal([]byte(data), &items); err != nil {
-			LogWarn("[search/render] data 解析失败 engine=%s err=%v", engine, err)
-			writeJSON(w, map[string]any{"ok": false, "msg": "data 解析失败"})
-			return
-		}
-		var rs []search.Result
-		seen := map[string]bool{}
-		for _, it := range items {
-			if it.URL == "" || seen[it.URL] {
-				continue
-			}
-			seen[it.URL] = true
-			rs = append(rs, search.Result{Engine: engine, Title: it.Title, URL: it.URL})
-		}
-		inst.searchMu.Lock()
-		if len(rs) > 0 {
-			inst.searchResult = rs // 单引擎回传结果
-			inst.searchQuery = rq.URL.Query().Get("query")
-			inst.searchEngine = engine
-		}
-		inst.searchMu.Unlock()
-		LogInfo("[search/render] webview 回传 engine=%s 结果=%d", engine, len(rs))
-		writeJSON(w, map[string]any{"ok": true, "count": len(rs), "engine": engine})
-	})
-
-	// /api/search/result 前端轮询拿 webview 渲染结果（异步）
-	mux.HandleFunc("/api/search/result", func(w http.ResponseWriter, rq *http.Request) {
-		inst.searchMu.Lock()
-		rs := inst.searchResult
-		inst.searchResult = nil
-		q := inst.searchQuery
-		eng := inst.searchEngine
-		inst.searchMu.Unlock()
-		if len(rs) == 0 {
-			writeJSON(w, map[string]any{"ok": false, "rendering": true, "query": q, "engine": eng})
-			return
-		}
-		inst.recordSearch(q)
-		writeJSON(w, map[string]any{"ok": true, "query": q, "results": rs, "via": "webview", "engine": eng})
-	})
-
 	mux.HandleFunc("/api/search", func(w http.ResponseWriter, rq *http.Request) {
 		q := strings.TrimSpace(rq.URL.Query().Get("q"))
 		if q == "" {
 			writeJSON(w, map[string]any{"ok": false, "msg": "缺少关键词"})
 			return
 		}
-		// 搜索引擎：WebView 渲染（单引擎，用户选）——Hidden 子窗口渲染引擎页，JS 抓结构化 → 导航回传。
-		// 用户硬决策：必须走 webview；单引擎可选（engine 参数），不聚合（砍并发）。
+		// HTTP-first：纯 HTTP 搜搜索引擎（baidu 带 BDUSS 过验证 → JSON 直解资源站 URL）
 		enabled := search.EnabledEngines()      // 配置开关
 		engName := rq.URL.Query().Get("engine") // 用户选的引擎（单引擎）
 		if engName == "" {
 			engName = "baidu" // 默认
 		}
 		start := time.Now()
-		LogInfo("[search] q=%s engine=%s 开始（webview 单引擎渲染）", q, engName)
-		if inst.SearchWebviewRender != nil {
-			// 找该引擎的 URL（用 q 构造）
-			engs := search.BrowserEngines(q, enabled)
-			var target *search.BrowserEngine
-			for i := range engs {
-				if engs[i].Name == engName {
-					target = &engs[i]
-					break
-				}
-			}
-			if target == nil {
-				// 引擎名无效/未启用 → 用第一个启用的
-				if len(engs) > 0 {
-					target = &engs[0]
-					engName = engs[0].Name
-				}
-			}
-			if target == nil {
-				writeJSON(w, map[string]any{"ok": false, "msg": "无可用引擎（配置开关全关？）", "query": q})
-				return
-			}
-			inst.searchMu.Lock()
-			inst.searchResult = nil
-			inst.searchQuery = q
-			inst.searchEngine = engName
-			inst.searchMu.Unlock()
-			LogInfo("[search] 触发 webview 渲染 engine=%s url=%s", target.Name, target.URL)
-			go inst.SearchWebviewRender(target.URL) // 单引擎，1 个窗口
-			writeJSON(w, map[string]any{"ok": true, "query": q, "via": "webview", "rendering": true, "msg": "渲染中…", "engine": engName})
-			return
-		}
-		// 无 webview 渲染器（Android/非桌面壳）：HTTP 四引擎后备。
+		LogInfo("[search] q=%s engine=%s 开始（HTTP-first）", q, engName)
+		// HTTP 搜索（纯 Go，不靠 WebView）
 		rs, err := inst.Search.Search(rq.Context(), q)
 		if err != nil {
 			LogWarn("[search] q=%s 失败 err=%v 耗时=%s", q, err, time.Since(start).Round(time.Millisecond))
@@ -578,6 +375,44 @@ func New(opts Options) *Instance {
 			LogInfo("[search] q=%s via=http 结果=%d 耗时=%s", q, len(rs), time.Since(start).Round(time.Millisecond))
 		}
 		writeJSON(w, map[string]any{"ok": true, "query": q, "results": rs})
+	})
+
+	// ── 百度扫码登录（纯 HTTP，不靠 WebView）：前端显示二维码 → 轮询 → 拿 BDUSS 固化 ──
+	var loginClient = baidulogin.New()
+	mux.HandleFunc("/api/login/qrcode", func(w http.ResponseWriter, rq *http.Request) {
+		qr, err := loginClient.GetQRCode(rq.Context())
+		if err != nil {
+			writeJSON(w, map[string]any{"ok": false, "msg": err.Error()})
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "imgurl": qr.ImgURL, "sign": qr.Sign})
+	})
+	mux.HandleFunc("/api/login/poll", func(w http.ResponseWriter, rq *http.Request) {
+		sign := rq.URL.Query().Get("sign")
+		if sign == "" {
+			writeJSON(w, map[string]any{"ok": false, "msg": "缺少 sign"})
+			return
+		}
+		tempBDUSS, status, err := loginClient.Poll(rq.Context(), sign)
+		if err != nil {
+			writeJSON(w, map[string]any{"ok": false, "msg": err.Error()})
+			return
+		}
+		if status < 2 {
+			// 未扫码(0) / 已扫码待确认(1)
+			writeJSON(w, map[string]any{"ok": true, "status": status, "msg": map[int]string{0: "等待扫码", 1: "已扫码，请在手机上确认"}[status]})
+			return
+		}
+		// 已确认：正式登录拿真 BDUSS
+		res, err := loginClient.Login(rq.Context(), tempBDUSS)
+		if err != nil {
+			writeJSON(w, map[string]any{"ok": false, "msg": err.Error()})
+			return
+		}
+		// 固化到 cookies/baidu.json（server.CookieEntry 格式）
+		_ = inst.Cookies.Save("baidu", []CookieEntry{{Name: "BDUSS", Value: res.BDUSS, Domain: ".baidu.com", Path: "/"}})
+		LogInfo("[login] 百度扫码登录成功，BDUSS 已固化")
+		writeJSON(w, map[string]any{"ok": true, "status": 2, "bduss": res.BDUSS[:8] + "..."})
 	})
 
 	// ── 账号固化（cookie 持久化）：登录后自动收集，WebView 搜索/嗅探时注入 ──
@@ -738,7 +573,6 @@ func New(opts Options) *Instance {
 		writeJSON(w, map[string]any{"ok": true, "tvs": tvList()})
 	})
 
-	tpl := template.Must(template.ParseFS(tplFS, "web/templates/*.html"))
 	mux.HandleFunc("/ui", func(w http.ResponseWriter, _ *http.Request) {
 		// 防缓存：/ui 是 SPA 入口，改了模板浏览器必须看到最新（之前用户打开旧缓存 UI）
 		w.Header().Set("Cache-Control", "no-store, max-age=0")
@@ -825,24 +659,6 @@ func tvList() []*ssdp.Device {
 		tvMu.Unlock()
 	}()
 	return cached // 首次可能 nil，立即返回
-}
-
-// waitSearchResult 轮询等 webview 渲染回传的搜索（JS fetch POST /api/search/render → ParseRendered 存 searchResult）。
-func (s *Instance) waitSearchResult(timeout time.Duration) []search.Result {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		s.searchMu.Lock()
-		rs := s.searchResult
-		if rs != nil {
-			s.searchResult = nil
-			s.searchQuery = ""
-			s.searchMu.Unlock()
-			return rs
-		}
-		s.searchMu.Unlock()
-		time.Sleep(400 * time.Millisecond)
-	}
-	return nil
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

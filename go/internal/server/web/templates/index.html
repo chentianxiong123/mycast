@@ -311,7 +311,7 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
       <h1>MyCast</h1>
       <div class="sub" id="baseurl">{{.BaseURL}}</div>
     </div>
-    <div class="hdr-dot" title="接收端在线"></div>
+    <div class="hdr-dot" title="在线"></div>
   </div>
 
   <!-- ═══════════ 首页（家庭影院：搜索 → 选站 → 集数 → 投屏，一条主链路）═══════════ -->
@@ -458,48 +458,6 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
       <div class="dim" style="margin-bottom:8px">登录一次自动保存，以后搜索自动带上（360 需登录态才能搜）。</div>
       <div class="recent" id="cookie-list"><div class="dim">加载中…</div></div>
     </div>
-    <div class="card">
-      <h2>搜索引擎开关</h2>
-      <div class="dim" style="margin-bottom:8px">控制启用哪些搜索引擎（默认只开百度）。</div>
-      <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:8px;align-items:center">
-        <label class="dim" style="display:flex;gap:4px;align-items:center;font-size:12px"><input type="checkbox" id="eng-so"> 360</label>
-        <label class="dim" style="display:flex;gap:4px;align-items:center;font-size:12px"><input type="checkbox" id="eng-baidu"> 百度</label>
-        <label class="dim" style="display:flex;gap:4px;align-items:center;font-size:12px"><input type="checkbox" id="eng-bing"> Bing</label>
-        <label class="dim" style="display:flex;gap:4px;align-items:center;font-size:12px"><input type="checkbox" id="eng-sogou"> 搜狗</label>
-      </div>
-      <button class="btn" onclick="saveEngines()" style="font-size:11px;padding:5px 12px">保存</button>
-      <span id="eng-save-msg" class="dim" style="font-size:11px;margin-left:8px"></span>
-    </div>
-    <div class="card">
-      <h2>高级：粘贴链接嗅探</h2>
-      <div class="sniffrow">
-        <input class="inp" id="sniff-url" placeholder="粘贴盗版站详情页 URL">
-        <button class="btn gh" onclick="sniffURL()">嗅探</button>
-      </div>
-      <div id="sniff-status" class="sniffeps"><div class="dim">给懂行的：粘贴详情页链接提取集数（JS 反爬自动用内置浏览器）。结果回到首页集数列表。</div></div>
-    </div>
-    <div class="card">
-      <h2>mock 测试（方向B 验证）</h2>
-      <div class="sniffrow">
-        <button class="btn gh" onclick="renderRealPage(location.origin+'/mock','真情(mock)')">点 mock 影视页</button>
-        <span class="dim" style="font-size:11px">模拟 sandat 结构，验证 点结果→子窗口渲染→判断→集数</span>
-      </div>
-    </div>
-    <div class="card">
-      <h2>js 注入测试（方向C 验证）</h2>
-      <div class="sniffrow">
-        <button class="btn gh" onclick="window.hc.openInject('https://www.njtrdl.com/bofang/366547-1-130.html')">js 注入 njtrdl</button>
-        <span class="dim" style="font-size:11px">可见 WebView 打开真页 + 直接注入 JS 去广告/归一化/集数提取（无 node/curl）</span>
-      </div>
-    </div>
-    <div class="card">
-      <h2>日志</h2>
-      <div class="dim" style="font-size:11px">已独立成「日志」页（tab 📋），<a onclick="goPage('logs')" style="color:var(--acc);cursor:pointer">点这里跳转</a>。</div>
-    </div>
-    <div class="card">
-      <h2>关于</h2>
-      <div class="dim">MyCast — 手机投屏中继。<br>接 B站 / 盗版站投屏 → 转发电视。<br>B站 URL 到期自动续期，长时间播放不卡。</div>
-    </div>
   </div>
 </div>
 
@@ -591,25 +549,14 @@ async function mockSearch() {
   const box = document.getElementById('search-res');
   const eng = document.getElementById('search-engine')?.value || 'baidu';
   const em = ENGINE_META[eng] || {name:eng};
-  box.innerHTML = '<div class="dim">'+em.name+' 渲染中…（单引擎 WebView，无感）</div>';
+  box.innerHTML = '<div class="dim">'+em.name+' 搜索中…</div>';
   try {
     const r = await fetch('/api/search?q='+encodeURIComponent(q)+'&engine='+encodeURIComponent(eng));
     const d = await r.json();
-    if(d.ok && d.rendering) { pollSearchResult(box, 25); return; } // 轮询等 webview 回传
     if(d.ok && (d.results||[]).length) { showSearchResults(d.results, box); return; }
     if(d.need_browser) { box.innerHTML = '<div class="warn">'+escapeHtml(d.msg||'需浏览器渲染')+'</div>'; return; }
     box.innerHTML = '<div class="warn">'+escapeHtml(d.msg||'搜索失败')+'</div>';
   } catch(e) { box.innerHTML = '<div class="warn">网络错误: '+escapeHtml(e.message)+'</div>'; }
-}
-
-// 轮询 webview 渲染结果（/api/search/result，最多 tries 次）
-function pollSearchResult(box, tries) {
-  if(tries <= 0) { box.innerHTML = '<div class="warn">渲染超时，无结果</div>'; return; }
-  fetch('/api/search/result').then(r=>r.json()).then(d=>{
-    if(d.ok && (d.results||[]).length) { showSearchResults(d.results, box); return; }
-    box.innerHTML = '<div class="dim">渲染中…（'+tries+'）</div>';
-    setTimeout(()=>pollSearchResult(box, tries-1), 700);
-  }).catch(()=>setTimeout(()=>pollSearchResult(box, tries-1), 700));
 }
 
 // 显示搜索结果
@@ -630,7 +577,7 @@ function renderSearchList() {
     const desc = r.desc || r.snippet || ''; // 真结果可能无摘要
     const zy = r.isZiYuan; // 资源站（vodplay/voddetail）→ 可收藏到媒体库（一条路：搜资源站→收藏→媒体库→投屏）
     const zyMark = zy ? '<span style="color:var(--acc);font-size:12px;margin-left:6px">★</span>' : '';
-    const favBtn = zy ? '<span style="color:var(--acc);font-size:12px;margin-left:8px" onclick="event.stopPropagation();favSearch(\''+r.url.replace(/'/g,"\\'")+\',\''+(r.title||'').replace(/'/g,"\\'")+'\')">＋收藏</span>' : '';
+    const favBtn = zy ? '<span style="color:var(--acc);font-size:12px;margin-left:8px" onclick="event.stopPropagation();favSearch(\''+escJS(r.url)+'\',\''+escJS(r.title||'')+'\')">＋收藏</span>' : '';
     return '<div class="sx-item">' +
       '<div class="sx-ico">'+em.icon+'</div>' +
       '<div class="sx-main" onclick="pickSite(\''+r.url.replace(/'/g,"\\'")+'\',\''+(r.title||r.url||'').replace(/'/g,"\\'")+'\')">' +
@@ -1177,40 +1124,6 @@ function pickSite(u, title) {
   fetch('/api/nav?url='+encodeURIComponent(u)).catch(()=>{});
 }
 
-// ── 真实页面渲染（方向B）：子窗口渲染 → 后端判断影视页 → 套进去（显示集数）/ 导航真实页 ──
-// 用户拍板：保持现在能加搜索结果筛选，点链接跳转时判断是不是影视页。
-function renderRealPage(u, title) {
-  if(!u) { toast('没有链接', false); return; }
-  // 无壳（Android 旧/无 pageRender 桥）：直接导航真实页（兜底 v0.13.3 行为）
-  if(!window.hc || !window.hc.pageRender) { location.href = u; return; }
-  goPage('home');
-  epLoading('识别页面…');
-  window.hc.pageRender(u); // 子窗口渲染 → outerHTML POST /api/page/render（后端判断+提取）
-  pollPageResult(u, title, 30);
-}
-
-// 轮询 /api/page/result：影视页→显示集数（套进去）；非影视→主窗口导航真实页
-function pollPageResult(u, title, tries) {
-  fetch('/api/page/result').then(r=>r.json()).then(d=>{
-    if(d.ok) {
-      if(d.is_video && d.episodes && d.episodes.length) {
-        // 识别到影视页 + 集数：套进去（集数卡片，点集数投屏）
-        renderEpsGrid(d.episodes, title || d.url || '');
-        toast('识别到 '+(d.episodes||[]).length+' 集');
-      } else {
-        // 非影视页（或影视页无集数）：主窗口导航真实页（保留 v0.13.3 浏览行为）
-        location.href = u;
-      }
-    } else {
-      if(tries<=0) { location.href = u; return; }
-      setTimeout(()=>pollPageResult(u, title, tries-1), 700);
-    }
-  }).catch(()=>{
-    if(tries<=0) { location.href = u; return; }
-    setTimeout(()=>pollPageResult(u, title, tries-1), 700);
-  });
-}
-
 // ── 电视选择 ──
 function selectTV(name) {
   toast('正在选择 '+name+'…');
@@ -1407,13 +1320,13 @@ function refresh() {
     } else if(s.tv) {
       heroI.textContent = '✅';
       heroT.textContent = '已选电视';
-      heroS.textContent = s.tv + ' · 等 B站投屏';
+      heroS.textContent = s.tv + ' · 就绪';
       heroB.textContent = '● 就绪'; heroB.className = 'hero-badge live';
     } else {
       heroI.textContent = '📡';
       heroT.textContent = '等待投屏';
-      heroS.textContent = '打开 B站 App → 投屏 → 选「MyCast」';
-      heroB.textContent = '● 接收端在线'; heroB.className = 'hero-badge idle';
+      heroS.textContent = '选电视 → 搜剧 → 投屏';
+      heroB.textContent = '● 就绪'; heroB.className = 'hero-badge idle';
     }
 
     document.getElementById('dock-sub').textContent = '目标电视：' + (s.tv || '未选择');
@@ -1429,7 +1342,7 @@ function refresh() {
 
 function renderBubbles(tvs, selected, playingTitle) {
   const el = document.getElementById('bubbles');
-  const selfs = tvs.filter(t => t.name === SELF_NAME || t.udn.includes('relay'));
+  const selfs = tvs.filter(t => t.name === SELF_NAME);
   const realTVs = tvs.filter(t => !selfs.includes(t));
 
   let html = '';
@@ -1437,7 +1350,7 @@ function renderBubbles(tvs, selected, playingTitle) {
     '<span class="bub-tag self">本机</span>'+
     '<div class="bub-ic self">'+(playingTitle?'📡':'📢')+'</div>'+
     '<div class="bub-name">MyCast</div>'+
-    '<div class="bub-ip">'+(playingTitle?'正在中继':'等待投屏')+'</div>'+
+    '<div class="bub-ip">'+(playingTitle?'投屏中':'待机')+'</div>'+
   '</div>';
 
   if(realTVs.length) {
@@ -1527,11 +1440,12 @@ document.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('pointerup', ()=>volDragging=false);
 });
 
-// 统一轮询
-setInterval(()=>{ refresh(); pollPlay(); }, 1000);
-setInterval(pollLogs, 2500);
-refresh(); pollPlay(); pollLogs(); loadSearchHistory(); loadLibrary();
-// demo 阶段：载入即展示独立搜索结果页（mock 数据），看 searxng 聚合格式
+// 轮询：只在操作台/设备页打 API（切走就停，省电省流量）
+setInterval(()=>{
+  if(curPage==='dock' || curPage==='dev') { refresh(); pollPlay(); }
+}, 2000);
+setInterval(()=>{ if(curPage==='logs') pollLogs(); }, 2500);
+refresh(); pollPlay(); loadSearchHistory(); loadLibrary();
 
 </script>
 </body>

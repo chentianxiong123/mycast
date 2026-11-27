@@ -15,14 +15,13 @@ import (
 func main() {
 	bdu, _ := os.ReadFile("/tmp/baidu-cookie-bdu.txt")
 	cookieStr := strings.TrimSpace(string(bdu))
+	// server.CookieEntry 格式（cookies/baidu.json，跟 internal/server/cookies.go 的 CookieEntry 一致）
 	type cookieEntry struct {
-		Name     string    `json:"name"`
-		Value    string    `json:"value"`
-		Path     string    `json:"path"`
-		Domain   string    `json:"domain"`
-		Secure   bool      `json:"secure"`
-		HttpOnly bool      `json:"httpOnly"`
-		Expires  time.Time `json:"expires"`
+		Name    string `json:"name"`
+		Value   string `json:"value"`
+		Domain  string `json:"domain"`
+		Path    string `json:"path"`
+		Expires int64  `json:"expires,omitempty"` // 0=会话
 	}
 	var entries []cookieEntry
 	for _, pair := range strings.Split(cookieStr, ";") {
@@ -36,12 +35,10 @@ func main() {
 		}
 		name := pair[:idx]
 		entries = append(entries, cookieEntry{
-			Name:     name,
-			Value:    pair[idx+1:],
-			Path:     "/",
-			Domain:   ".baidu.com",
-			Secure:   true,
-			HttpOnly: name == "BDUSS",
+			Name:   name,
+			Value:  pair[idx+1:],
+			Path:   "/",
+			Domain: ".baidu.com",
 		})
 	}
 	outDir := os.Getenv("MYCAST_COOKIE_DIR")

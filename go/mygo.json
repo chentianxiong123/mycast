@@ -1,0 +1,8 @@
+{
+  "name": "mycast",
+  "slug": "mycast",
+  "identifier": "dev.mycast.app",
+  "version": "0.1",
+  "copyright": "© 2026 mycast",
+  "main": "./cmd/mycast-mygo"
+}

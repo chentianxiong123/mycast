@@ -16,6 +16,7 @@ import (
 	"compress/zlib"
 	"context"
 	"encoding/base64"
+	"log"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -494,7 +495,12 @@ func (a *Aggregator) searchBaidu(ctx context.Context, query string) ([]Result, e
 	if a.CookieFn != nil {
 		if c := a.CookieFn("baidu"); c != "" {
 			req.Header.Set("Cookie", c)
+			log.Printf("searchBaidu 带 BDUSS cookie（%d 字节，%d 条）", len(c), len(strings.Split(c, ";")))
+		} else {
+			log.Printf("searchBaidu 没带 BDUSS cookie（CookieStore 没读到 cookies/baidu.json?）")
 		}
+	} else {
+		log.Printf("searchBaidu 没注入 CookieFn（server 没设?）")
 	}
 	// 用裸 client（不 impersonate，避免 baidu 识别爬虫；带 BDUSS cookie 过验证）
 	resp, err := a.plainHC.Do(req)

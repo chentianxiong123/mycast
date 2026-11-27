@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"sync"
+	"time"
 
 	"github.com/huin/goupnp/dcps/av1"
 
@@ -18,6 +19,10 @@ type Controller struct {
 	dev *ssdp.Device
 	av  *av1.AVTransport1
 	rc  *av1.RenderingControl1
+	// Status 缓存（500ms 内复用，避免每秒 3 次 SOAP 慢）
+	stMu   sync.Mutex
+	stCache map[string]string
+	stAt   time.Time
 }
 
 // NewController 根据发现的设备创建控制句柄
@@ -71,6 +76,15 @@ func (c *Controller) Control(action, target string, volume int) error {
 
 // Status 查播放状态
 func (c *Controller) Status() map[string]string {
+	// 缓存 500ms（避免每秒 3 次 SOAP 慢）
+	c.stMu.Lock()
+	if c.stCache != nil && time.Since(c.stAt) < 500*time.Millisecond {
+		out := c.stCache
+		c.stMu.Unlock()
+		return out
+	}
+	c.stMu.Unlock()
+
 	out := map[string]string{"device": c.dev.Name}
 	state, status, _, err := c.av.GetTransportInfo(0)
 	if err == nil {
@@ -87,5 +101,10 @@ func (c *Controller) Status() map[string]string {
 			out["volume"] = fmt.Sprint(v)
 		}
 	}
+
+	c.stMu.Lock()
+	c.stCache = out
+	c.stAt = time.Now()
+	c.stMu.Unlock()
 	return out
 }
