@@ -244,21 +244,41 @@ func New(opts Options) *Instance {
 		Logf("[sniff] 成功 url=%s 集数=%d", u, len(eps))
 		// 先返回集数（快），封面/元数据异步补（不阻塞）
 		writeJSON(w, map[string]any{"ok": true, "url": u, "episodes": eps})
-		// 后台抓封面 + 元数据（慢，不阻塞响应）
+		// 封面 + 元数据：优先读本地缓存；命中就不再访问原站。
+		// 缓存落盘 dataDir/media-cache/<sha256>.json，重启/重装仍在。
 		go func() {
-			if htmlText, ferr := e.Fetch(u); ferr == nil {
-				media := meta.FromHTML(htmlText)
-				if media.Poster == "" {
-					media.Poster = e.ExtractPoster(htmlText, u)
+			var media meta.Media
+			cacheFile := inst.mediaCacheFile(u)
+			cached := false
+			if b, err := os.ReadFile(cacheFile); err == nil {
+				if json.Unmarshal(b, &media) == nil && !media.Empty() {
+					cached = true
+					Logf("[meta] 本地缓存命中 %s", u)
 				}
-				// 存到 inst.sniffMedia[u] 供后续 /api/sniff/media 取（或前端二次拉）
-				inst.sniffMu.Lock()
-				if inst.sniffMedia == nil {
-					inst.sniffMedia = map[string]meta.Media{}
-				}
-				inst.sniffMedia[u] = media
-				inst.sniffMu.Unlock()
 			}
+			if !cached {
+				if htmlText, ferr := e.Fetch(u); ferr == nil {
+					media = meta.FromHTML(htmlText)
+					if media.Poster == "" {
+						media.Poster = e.ExtractPoster(htmlText, u)
+					}
+					if !media.Empty() {
+						_ = os.MkdirAll(filepath.Dir(cacheFile), 0o755)
+						if b, err := json.MarshalIndent(media, "", "  "); err == nil {
+							_ = os.WriteFile(cacheFile, b, 0o644)
+						}
+					}
+				}
+			}
+			if media.Empty() {
+				return
+			}
+			inst.sniffMu.Lock()
+			if inst.sniffMedia == nil {
+				inst.sniffMedia = map[string]meta.Media{}
+			}
+			inst.sniffMedia[u] = media
+			inst.sniffMu.Unlock()
 		}()
 	})
 
@@ -268,7 +288,21 @@ func New(opts Options) *Instance {
 		inst.sniffMu.Lock()
 		m, ok := inst.sniffMedia[u]
 		inst.sniffMu.Unlock()
-		writeJSON(w, map[string]any{"ok": ok, "media": m})
+		cached := ok
+		if !ok {
+			// 进程重启后内存空了：从磁盘读回，不再访问原站
+			if b, err := os.ReadFile(inst.mediaCacheFile(u)); err == nil && json.Unmarshal(b, &m) == nil && !m.Empty() {
+				ok = true
+				cached = true
+				inst.sniffMu.Lock()
+				if inst.sniffMedia == nil {
+					inst.sniffMedia = map[string]meta.Media{}
+				}
+				inst.sniffMedia[u] = m
+				inst.sniffMu.Unlock()
+			}
+		}
+		writeJSON(w, map[string]any{"ok": ok, "media": m, "cached": cached})
 	})
 
 	// 本地播放器专用流代理：解决 hls.js/mp4 跨域被拦（不是投屏中转，无会话）。
@@ -740,6 +774,16 @@ func tvList() []*ssdp.Device {
 		tvMu.Unlock()
 	}()
 	return cached // 首次可能 nil，立即返回
+}
+
+// mediaCacheFile 元数据缓存路径（按 URL 哈希，重启不丢）。
+func (inst *Instance) mediaCacheFile(u string) string {
+	sum := sha256.Sum256([]byte(u))
+	dir := inst.DataDir
+	if dir == "" {
+		dir = "."
+	}
+	return filepath.Join(dir, "media-cache", hex.EncodeToString(sum[:])+".json")
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

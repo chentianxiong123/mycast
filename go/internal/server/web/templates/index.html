@@ -12,6 +12,7 @@
   --bg:#0a0b0e;--bg2:#0f1118;--card:#141720;--card2:#1a1e2a;
   --line:#222838;--fg:#e4e9f2;--dim:#5e6880;--dim2:#3a4358;
   --acc:#ff4d6d;--acc-soft:rgba(255,77,109,.12);--ok:#34d399;--warn:#fbbf24;
+  --radius:14px;
 }
 *{box-sizing:border-box;margin:0}
 body{
@@ -33,13 +34,23 @@ body{
 .hdr-dot{width:7px;height:7px;border-radius:50%;background:var(--ok);animation:blink 1.4s infinite;flex-shrink:0}
 @keyframes blink{50%{opacity:.25}}
 
-/* card */
-.card{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:12px 13px;margin-bottom:10px}
-.card h2{font-size:10px;color:var(--dim);font-weight:700;letter-spacing:.1em;text-transform:uppercase;margin-bottom:9px}
+/* ── 统一页面标题：每个 page 用 data-title，一处定义所有页面观感 ── */
+.page.active::before{content:attr(data-title);display:block;font-size:21px;font-weight:800;letter-spacing:.02em;margin:0 0 14px}
+
+/* card：统一圆角/间距/标题（去掉此前 10px 全大写灰字）*/
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:14px;margin-bottom:12px}
+.card h2,.lib-sec h2,.hero-q{
+  font-size:13px;color:var(--fg);font-weight:700;letter-spacing:0;
+  display:flex;align-items:center;gap:8px;margin-bottom:12px;
+}
+.card h2::before,.lib-sec h2::before,.hero-q::before{
+  content:'';width:3px;height:14px;border-radius:2px;background:var(--acc);flex-shrink:0;
+}
 
 /* ── 资源嗅探 ── */
 .sniffrow{display:flex;gap:10px;margin-bottom:8px;align-items:center}
 .inp{flex:1;height:40px;background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:0 12px;color:var(--fg);font-size:13px;outline:none;min-width:0}
+input.inp::placeholder{color:var(--dim2)}
 .inp:focus{border-color:var(--acc);box-shadow:0 0 0 3px rgba(255,77,109,.12)}
 /* 搜索引擎下拉：深底浅字（WebKitGTK 原生 select 默认白底蓝字看不清） */
 /* 所有下拉（搜索引擎/日志等级等）：深底浅字。WebKitGTK 原生 select 白底黑字、忽略 CSS background，须 appearance:none 强制 */
@@ -93,9 +104,9 @@ select.inp option{background:var(--card2);color:var(--fg)}
 .sx-item:last-child{border-bottom:none}
 .sx-ico{width:20px;height:20px;border-radius:4px;background:var(--card2);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;flex-shrink:0;margin-top:2px}
 .sx-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;cursor:pointer}
-.sx-title{font-size:13px;font-weight:600;color:#6aa3ff;line-height:1.35;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
-.sx-title:hover{text-decoration:underline}
-.sx-url{font-size:10px;color:var(--ok);word-break:break-all}
+.sx-title{font-size:13px;font-weight:600;color:var(--fg);line-height:1.4;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.sx-main:hover .sx-title{color:var(--acc)}
+.sx-url{font-size:10px;color:var(--dim);word-break:break-all}
 .sx-desc{font-size:11px;color:var(--dim);line-height:1.5;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 .sx-meta{display:flex;align-items:center;gap:6px;margin-top:2px}
 .sx-eng{font-size:9px;font-weight:700;text-transform:uppercase;color:var(--acc);background:var(--acc-soft);padding:1px 6px;border-radius:4px}
@@ -230,15 +241,17 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
 .bub-empty{grid-column:1/-1;font-size:11px;color:var(--dim2);text-align:center;padding:14px;background:var(--bg2);border-radius:9px;line-height:1.5}
 
 /* btn */
-.btn{border:0;border-radius:8px;min-height:38px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;transition:transform .1s}
-.btn:active{transform:scale(.94)}
-.btn.gh{background:transparent;border:1px solid var(--line);color:var(--dim);display:block;width:100%;margin-top:8px}
-.btn.gh:active{border-color:var(--dim);color:var(--fg)}
+/* 按钮：一套基础样式，pri/main 只换配色，gh 只换底色 */
+.btn{border:1px solid var(--line);background:var(--card2);color:var(--fg);border-radius:10px;min-height:40px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;transition:transform .1s,background .15s}
+.btn:active{transform:scale(.96)}
+.btn.gh{background:transparent;color:var(--dim);display:block;width:100%;margin-top:8px}
+.btn.gh:hover{border-color:var(--dim);color:var(--fg)}
+.btn:disabled{opacity:.5;cursor:default}
 /* 行内按钮（嗅探/搜索行的「嗅探」「搜索」，覆盖 .btn.gh 的整行样式，避免挤在一起）*/
 .sniffrow .btn{width:auto;margin-top:0;flex-shrink:0;height:40px;padding:0 18px;border-radius:10px;font-size:12px;color:var(--fg);border-color:var(--line);background:var(--card2)}
 .sniffrow .btn:active{border-color:var(--acc);color:var(--acc)}
-.btn.pri{background:var(--acc);color:#fff;border:0;padding:8px 16px}
-.btn.main{background:var(--acc);color:#fff}
+.btn.pri,.btn.main{background:var(--acc);border-color:var(--acc);color:#fff;box-shadow:0 4px 14px rgba(255,77,109,.22)}
+.btn.pri:hover,.btn.main:hover{filter:brightness(1.08)}
 
 /* err */
 .errbar{margin-top:8px;padding:7px 10px;font-size:10px;color:var(--acc);background:rgba(255,77,109,.08);border:1px solid rgba(255,77,109,.18);border-radius:7px;word-break:break-all}
@@ -266,14 +279,14 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
 .tab{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;padding:7px 4px;border-radius:10px;cursor:pointer;color:var(--dim);transition:all .15s;user-select:none}
 .tab .ti{font-size:17px;line-height:1}
 .tab .tt{font-size:9px;font-weight:700}
-.tab.active{color:var(--acc)}
+.tab.active{color:var(--acc);background:var(--acc-soft)}
 .tab.active .ti{transform:scale(1.1)}
 .tab .tbadge{position:relative}
 .tab .tbadge::after{content:'';position:absolute;top:-3px;right:-3px;width:7px;height:7px;border-radius:50%;background:var(--acc)}
 
 /* 日志：两级滚动（页面外层照旧 + 日志区内层独立滚动），滚动条常驻可见 */
 .logbox{
-  height:calc(100vh - 250px);min-height:240px;
+  height:calc(100vh - 290px);min-height:220px;
   overflow-y:auto;overflow-x:hidden;
   border:1px solid var(--line);border-radius:10px;
   background:var(--bg2);padding:10px 12px;
@@ -294,8 +307,7 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
 .hidden{display:none!important}
 
 /* ═══════════ 媒体库（移植 OnScreen：继续观看行 + 海报墙）═══ */
-.lib-sec{margin-bottom:14px}
-.lib-sec h2{font-size:10px;color:var(--dim);font-weight:700;letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px}
+.lib-sec{margin-bottom:16px}
 .row-scroll{display:flex;gap:10px;overflow-x:auto;padding-bottom:4px;scrollbar-width:none}
 .row-scroll::-webkit-scrollbar{display:none}
 /* 继续观看大卡（学 OnScreen ContinueWatching）*/
@@ -321,31 +333,42 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
 .poster-sub{font-size:9px;color:var(--dim);margin-top:1px}
 
 /* ═══════════ 详情浮层（学 OnScreen ItemDetail：封面+标题+集数网格）═══ */
-.detail-overlay{position:fixed;inset:0;z-index:60;background:var(--bg);display:flex;flex-direction:column;overflow:hidden}
+/* 详情是普通 page：跟其他页面同一套卡片/滚动/间距，不再独立 fixed 浮层 */
 /* 封面按 2:3 海报比例居中展示，不再把竖版海报裁成横条 */
-.detail-cover{height:auto;flex-shrink:0;padding:16px;background:linear-gradient(135deg,var(--card2),var(--bg2));border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:center}
-.cover-photo{width:132px;aspect-ratio:2/3;border-radius:12px;background:var(--card);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;overflow:hidden;font-size:54px;font-weight:900;color:var(--acc);box-shadow:0 8px 28px rgba(0,0,0,.35)}
+/* 顶部左封面 + 右元数据：横排铺满，去掉大块空白 */
+.detail-top{
+  display:flex;gap:14px;padding:14px;margin-bottom:12px;
+  background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+}
+.detail-cover{
+  flex:0 0 112px;width:112px;aspect-ratio:2/3;height:auto;
+  border-radius:12px;background:var(--card);border:1px solid var(--line);
+  display:flex;align-items:center;justify-content:center;overflow:hidden;
+  font-size:44px;font-weight:900;color:var(--acc);box-shadow:0 8px 24px rgba(0,0,0,.35);
+}
+.cover-photo{width:100%;height:100%;display:flex;align-items:center;justify-content:center;overflow:hidden}
 .cover-photo img{width:100%;height:100%;object-fit:cover;display:block}
-.detail-body{flex:1;min-height:0;padding:14px 14px 12px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--dim2) transparent}
-.detail-title{font-size:20px;font-weight:800;margin-bottom:5px}
-.detail-meta{font-size:11px;margin-bottom:12px}
+.detail-info{flex:1;min-width:0;display:flex;flex-direction:column;gap:8px;max-height:190px;overflow-y:auto;scrollbar-width:thin}
+.detail-title{font-size:15px;font-weight:750;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.detail-meta{font-size:11px;margin-bottom:10px}
 .detail-meta.fail{color:#ff8a8a;font-size:12px}
-.detail-card{background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:12px}
-.detail-card .row{font-size:12px;line-height:1.7;color:var(--dim);display:flex;gap:6px}
-.detail-card .row .k{color:var(--dim);flex-shrink:0;min-width:32px;opacity:.7}
-.detail-card .row .v{color:var(--txt);flex:1;word-break:break-all}
+.detail-card{background:transparent;border:0;padding:0;margin:0}
+.detail-card .row{font-size:11px;line-height:1.55;color:var(--dim);display:flex;gap:6px}
+.detail-card .row .k{color:var(--dim);flex-shrink:0;min-width:30px;opacity:.8}
+.detail-card .row .v{color:var(--fg);flex:1;word-break:break-all}
 .detail-card .row.empty{display:none}
-.detail-synopsis{font-size:12px;line-height:1.6;color:var(--dim);margin-top:8px;max-height:4.8em;overflow:hidden}
+.detail-synopsis{font-size:11px;line-height:1.5;color:var(--dim);margin-top:2px;max-height:3em;overflow:hidden}
 .detail-synopsis.open{max-height:none}
 .detail-synopsis-toggle{color:var(--acc);font-size:11px;cursor:pointer;margin-top:4px;display:inline-block}
 .detail-eps{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
 .detail-ep{background:var(--card2);border:1px solid var(--line);border-radius:8px;padding:9px 4px;text-align:center;cursor:pointer;font-size:11px;color:var(--dim)}
 .detail-ep:active{transform:scale(.96)}
 .detail-ep.sel{background:var(--acc-soft);border-color:var(--acc);color:var(--acc);font-weight:700}
-/* 底栏是 flex last child，不 fixed：浮层内只有 detail-body 一个滚动条 */
-.detail-bar{flex-shrink:0;display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:10px 14px;background:var(--bg);border-top:1px solid var(--line)}
-.detail-bar .btn{min-height:44px;height:44px;border-radius:10px;font-size:13px;padding:0 6px}
-.detail-close-btn{background:var(--card2);color:var(--dim)}
+.detail-bar{display:flex;gap:6px;margin:-2px 0 14px;overflow-x:auto;scrollbar-width:none}
+.detail-bar::-webkit-scrollbar{display:none}
+.detail-bar .btn{flex:1 0 auto;min-height:38px;height:38px;border-radius:10px;font-size:12px;padding:0 8px;white-space:nowrap;background:var(--card2);border:1px solid var(--line);color:var(--fg)}
+.detail-bar .btn.pri{background:var(--acc);border-color:var(--acc);color:#fff}
+.detail-close-btn{flex:0 0 38px!important;width:38px;padding:0!important;color:var(--dim)!important;background:transparent!important}
 .detail-play-btn:disabled{opacity:.4}
 
 /* ═══════════ 内置播放器（ArtPlayer 现代 UI + hls.js 解码）═══ */
@@ -358,6 +381,30 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
 .player-btn:disabled{opacity:.35;cursor:default}
 .player-tap{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:83;padding:14px 26px;border:1px solid rgba(255,255,255,.3);border-radius:28px;background:rgba(20,23,32,.85);color:#fff;font-size:16px;font-weight:700;cursor:pointer;backdrop-filter:blur(8px)}
 .player-tap:active{background:rgba(255,77,109,.7)}
+
+/* ── 响应式：窄屏（手机）整体收缩，页面结构不变 ── */
+@media (max-width:420px){
+  .main{padding:12px 12px 80px}
+  .card{padding:12px}
+  .page.active::before{font-size:19px;margin-bottom:12px}
+  .detail-top{gap:10px;padding:10px}
+  .detail-cover{flex-basis:96px;width:96px}
+  .detail-info{max-height:none}
+  .detail-title{font-size:14px}
+  .detail-eps,.ep-grid{grid-template-columns:repeat(4,1fr);gap:6px}
+  .detail-bar{gap:5px}
+  .detail-bar .btn{font-size:11px;padding:0 5px;height:36px;min-height:36px}
+  .poster-card,.poster-img{width:96px}
+  .poster-img{height:144px}
+  .continue-card,.continue-img{width:168px}
+  .continue-img{height:95px}
+  .search-engine{width:66px;padding-left:8px}
+  .logbox{height:calc(100vh - 270px)}
+}
+/* 宽屏：内容仍锁在 500px，但集数网格多列铺开，不留大片空白 */
+@media (min-width:640px){
+  .detail-eps,.ep-grid{grid-template-columns:repeat(6,1fr)}
+}
 </style>
 </head>
 <body>
@@ -372,7 +419,7 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
   </div>
 
   <!-- ═══════════ 首页（家庭影院：搜索 → 选站 → 集数 → 投屏，一条主链路）═══════════ -->
-  <div class="page active" id="page-search">
+  <div class="page active" id="page-search" data-title="搜索">
     <!-- 搜索（想看什么 card：搜索框 + 搜索记录 + 结果区，全在一个框里）-->
     <div class="card">
       <div class="hero-q">想看什么？</div>
@@ -418,7 +465,7 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
   <!-- ═══════════ 真实页面查看器（点击搜索结果 → WebView 渲染 → iframe 显示，不归一化/不去广告）═══ -->
   <!-- ═══════════ 搜索结果页（独立页，效仿 searxng 聚合）═══ -->
   <!-- ═══════════ 媒体库（移植 OnScreen UI 结构：继续观看行 + 海报墙）═══ -->
-  <div class="page" id="page-library">
+  <div class="page" id="page-library" data-title="媒体库">
     <!-- 继续观看行（学 OnScreen ContinueWatching：大卡 + 进度条 + 点击续投屏）-->
     <div class="lib-sec" id="lib-continue-sec">
       <h2>继续观看</h2>
@@ -433,8 +480,8 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
   </div>
 
   <!-- ═══════════ 操作台 ═══════════ -->
-  <div class="page" id="page-dock">
-    <div class="layer-bar"><button class="btn gh" onclick="backFromLayer()">← 返回</button><b>遥控器</b></div>
+  <div class="page" id="page-dock" data-title="遥控器">
+    <div class="layer-bar"><button class="btn gh" onclick="backFromLayer()">← 返回</button></div>
     <div class="dock" id="dock">
       <div class="dock-cover">
         <div class="cover-tv">📺</div>
@@ -474,8 +521,8 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
   </div>
 
   <!-- ═══════════ 设备 ═══════════ -->
-  <div class="page" id="page-dev">
-    <div class="layer-bar"><button class="btn gh" onclick="backFromLayer()">← 返回</button><b>设备</b></div>
+  <div class="page" id="page-dev" data-title="设备">
+    <div class="layer-bar"><button class="btn gh" onclick="backFromLayer()">← 返回</button></div>
     <div class="card">
       <h2>设备</h2>
       <div class="bubbles" id="bubbles"><div class="bub-empty">加载中…</div></div>
@@ -484,7 +531,7 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
   </div>
 
   <!-- ═══════════ 设置（高级嗅探 + 日志 + 关于）═══════════ -->
-  <div class="page" id="page-logs">
+  <div class="page" id="page-logs" data-title="运行日志">
     <div class="card">
       <h2>运行日志（/api/logs）</h2>
       <div class="log-toolbar">
@@ -502,37 +549,43 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
     </div>
   </div>
 
-  <div class="page" id="page-set">
+  <div class="page" id="page-set" data-title="设置">
     <div class="card">
       <h2>账号固化（搜索引擎登录态）</h2>
       <div class="dim" style="margin-bottom:8px">登录一次自动保存，以后搜索自动带上（360 需登录态才能搜）。</div>
       <div class="recent" id="cookie-list"><div class="dim">加载中…</div></div>
     </div>
   </div>
-</div>
 
-<!-- ═══════════ 详情浮层（学 OnScreen ItemDetail：封面+标题+集数网格+播放）═══ -->
-<div id="detail-overlay" class="detail-overlay hidden">
-  <div class="detail-cover" id="detail-cover">?</div>
-  <div class="detail-body">
-    <div class="detail-title" id="detail-title">…</div>
-    <div class="detail-card hidden" id="detail-card">
-      <div class="row" id="dc-actors"><span class="k">主演</span><span class="v"></span></div>
-      <div class="row" id="dc-director"><span class="k">导演</span><span class="v"></span></div>
-      <div class="row" id="dc-region"><span class="k">地区</span><span class="v"></span></div>
-      <div class="row" id="dc-extra"><span class="k">类型</span><span class="v"></span></div>
-      <div class="detail-synopsis" id="dc-synopsis"></div>
-      <span class="detail-synopsis-toggle" id="dc-toggle" onclick="toggleSynopsis()">展开 ⌄</span>
+<!-- ═══════════ 详情页（普通 page，不再独立浮层；顶部左封面+右元数据）═══ -->
+  <div class="page" id="page-detail" data-title="详情">
+  <!-- 顶部：左封面（2:3）+ 右元数据，横向空间用满，不再上下乱堆 -->
+  <div class="detail-top">
+    <div class="detail-cover" id="detail-cover">?</div>
+    <div class="detail-info">
+      <div class="detail-title" id="detail-title">…</div>
+      <div class="detail-card hidden" id="detail-card">
+        <div class="row" id="dc-actors"><span class="k">主演</span><span class="v"></span></div>
+        <div class="row" id="dc-director"><span class="k">导演</span><span class="v"></span></div>
+        <div class="row" id="dc-region"><span class="k">地区</span><span class="v"></span></div>
+        <div class="row" id="dc-extra"><span class="k">类型</span><span class="v"></span></div>
+        <div class="detail-synopsis" id="dc-synopsis"></div>
+        <span class="detail-synopsis-toggle" id="dc-toggle" onclick="toggleSynopsis()">展开 ⌄</span>
+      </div>
     </div>
+  </div>
+  <!-- 操作条：放在顶部信息下方，不压在页面底部 -->
+  <div class="detail-bar">
+    <button class="btn detail-close-btn" onclick="closeDetail()" title="返回">✕</button>
+    <button class="btn detail-play-btn" id="detail-local" onclick="playEpLocal()" disabled>📱 本地</button>
+    <button class="btn pri detail-play-btn" id="detail-play" onclick="playEp()" disabled>▶ 投屏</button>
+    <button class="btn detail-play-btn" id="detail-copy" onclick="copyEp()" disabled>📋 复制</button>
+    <button class="btn detail-play-btn" id="detail-fav" onclick="favCurrent()">⭐ 收藏</button>
+  </div>
+  <div class="detail-body">
     <div class="detail-meta dim" id="detail-meta">提取集数中…</div>
     <div class="detail-eps" id="detail-eps"></div>
   </div>
-  <div class="detail-bar">
-    <button class="btn pri detail-close-btn" onclick="closeDetail()">关闭</button>
-    <button class="btn gh detail-play-btn" id="detail-local" onclick="playEpLocal()" disabled>📱 本地播放</button>
-    <button class="btn gh detail-play-btn" id="detail-play" onclick="playEp()" disabled>▶ 投屏</button>
-    <button class="btn gh detail-play-btn" id="detail-copy" onclick="copyEp()" disabled>📋 复制</button>
-    <button class="btn gh detail-play-btn" id="detail-fav" onclick="favCurrent()">⭐ 收藏</button>
   </div>
 </div>
 
@@ -566,8 +619,8 @@ const SELF_NAME = "MyCast";
 let curPage = 'home';
 let layerFrom = 'search'; // 层叠页（遥控器/设备）返回时回哪个主页面
 function goPage(p) {
-  // 进层叠页时记住来源；从别的层叠页跳过来时保留原来源
-  if((p === 'dock' || p === 'dev') && ['search','library','set','logs'].includes(curPage)) layerFrom = curPage;
+  // 进层叠页（详情/遥控器/设备）时记住来源；从别的层叠页跳过来时保留原来源
+  if((p === 'detail' || p === 'dock' || p === 'dev') && ['search','library','set','logs'].includes(curPage)) layerFrom = curPage;
   curPage = p;
   document.querySelectorAll('.page').forEach(x => x.classList.toggle('active', x.id === 'page-'+p));
   document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x.dataset.page === p));
@@ -949,10 +1002,7 @@ function escJS(s) { return String(s).replace(/'/g,"\\'"); }
 // 详情（学 OnScreen ItemDetail）：点海报 → 打开详情浮层（封面+标题+集数网格）
 function openDetail(url, title) {
   if(!url) { toast('无链接', false); return; }
-  // 打开浮层：锁住背后页面滚动，浮层内只留一个滚动条
-  const ov = document.getElementById('detail-overlay');
-  ov.classList.remove('hidden');
-  document.body.style.overflow = 'hidden';
+  goPage('detail'); // 普通页面层叠进入，跟其他页面同一套布局
   window.__detailURL = url;
   window.__detailTitle = title || '';
   window.__curMedia = null;
@@ -1091,8 +1141,7 @@ function selectDetailEp(index) {
 }
 
 function closeDetail() {
-  document.getElementById('detail-overlay').classList.add('hidden');
-  document.body.style.overflow = '';
+  backFromLayer();
   selEp = null;
 }
 
