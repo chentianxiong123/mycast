@@ -2,12 +2,14 @@
 package tv
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"sync"
 	"time"
 
 	"github.com/huin/goupnp/dcps/av1"
+	"github.com/huin/goupnp/soap"
 
 	"mycast/internal/ssdp"
 	"mycast/internal/upnp"
@@ -42,14 +44,57 @@ func NewController(dev *ssdp.Device) (*Controller, error) {
 	return c, nil
 }
 
-// Push 设置播放地址并开始播放
+// Push 设置播放地址并开始播放。
+// 国产电视（如 HappyCast）description.xml 里的 controlURL 是相对路径
+// `_urn:...AVTransport_control`，goupnp 拼出来虽然奇怪但**是对的**——实测能正常
+// 返回 GetTransportInfo。所以原始地址优先，连接类错误重试 3 次；
+// 只有 SOAP fault（有效响应）才说明地址错了，此时才换候选。
 func (c *Controller) Push(uri, title, contentType string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if err := c.av.SetAVTransportURI(0, uri, upnp.DIDLLite(uri, title, contentType)); err != nil {
-		return err
+	didl := upnp.DIDLLite(uri, title, contentType)
+	var lastErr error
+	for i := 0; i < 3; i++ {
+		err := c.av.SetAVTransportURI(0, uri, didl)
+		if err == nil {
+			if err = c.av.Play(0, "1"); err == nil {
+				return nil
+			}
+		}
+		lastErr = err
+		var sf *soap.SOAPFaultError
+		if errors.As(err, &sf) {
+			break // 有效 SOAP 响应：地址对，是 action/参数问题，别换地址
+		}
+		time.Sleep(250 * time.Millisecond) // 电视偶发 connection reset，重试
 	}
-	return c.av.Play(0, "1")
+	// 连接类错误持续失败才尝试常见候选路径
+	if c.dev == nil || c.dev.Location == "" {
+		return lastErr
+	}
+	u, err := url.Parse(c.dev.Location)
+	if err != nil {
+		return lastErr
+	}
+	base := url.URL{Scheme: u.Scheme, Host: u.Host}
+	for _, p := range []string{
+		"/AVTransport/control", "/upnp/control/AVTransport",
+		"/MediaRenderer/AVTransport/Control", "/ctl/AVTransport",
+	} {
+		ep := base
+		ep.Path = p
+		c.av.ServiceClient.SOAPClient.EndpointURL = ep
+		if e := c.av.SetAVTransportURI(0, uri, didl); e != nil {
+			lastErr = e
+			continue
+		}
+		if e := c.av.Play(0, "1"); e != nil {
+			lastErr = e
+			continue
+		}
+		return nil
+	}
+	return fmt.Errorf("AVTransport 推送失败: %w", lastErr)
 }
 
 // Control 播放控制

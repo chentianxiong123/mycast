@@ -36,6 +36,7 @@ type Relay struct {
 	ctrl    *tv.Controller
 	ses     *media.Session
 	curURL  string // 上游原始 URL（B站给的）
+	curTitle string // 当前推给电视的标题（无本地会话时给遥控器页显示）
 	lastErr string
 	// startedAt 最近一次成功建立会话的时间。
 	//
@@ -367,7 +368,7 @@ func (rl *Relay) startRelayByCID(aid, cid string) {
 		MimeType: st.MimeType,
 		Referer:  "https://www.bilibili.com/",
 		UA:       rl.bili.UA,
-		Title:    "Bilibili",
+		Title:    "B站",
 	}, mode)
 	if err != nil {
 		rl.setErr("媒体会话失败: " + err.Error())
@@ -451,23 +452,21 @@ func (rl *Relay) Control(action, arg string) error {
 	hasTV := rl.tv != nil
 	rl.mu.Unlock()
 
-	if action == "stop" {
-		rl.stopRelay(false)
-		return nil
-	}
-	if action == "reconnect" {
-		// 重新推一次当前会话给电视
-		rl.mu.Lock()
-		ses := rl.ses
-		rl.mu.Unlock()
-		if ses == nil {
-			return fmt.Errorf("没有正在播放的会话")
-		}
-		rl.pushToTV(ses)
-		return nil
-	}
 	if !hasTV || ctrl == nil {
 		return fmt.Errorf("尚未选择电视")
+	}
+	if action == "stop" {
+		return ctrl.Control("stop", "", 0)
+	}
+	if action == "reconnect" {
+		// 无中转：重新推当前真流 URL 给电视
+		rl.mu.Lock()
+		u := rl.curURL
+		rl.mu.Unlock()
+		if u == "" {
+			return fmt.Errorf("没有正在播放的流")
+		}
+		return ctrl.Control("play", "", 0)
 	}
 	switch action {
 	case "play":
@@ -495,6 +494,43 @@ func (rl *Relay) Control(action, arg string) error {
 		return ctrl.Control("volume", "", v)
 	}
 	return fmt.Errorf("未知操作: %s", action)
+}
+
+// PushDirect 把拿到的真流 URL 直接推给电视，不建本地 /m/ 中转会话。
+// 同步返回 SOAP 结果：推失败立刻告诉前端，不允许假成功。
+func (rl *Relay) PushDirect(streamURL, title, mime string) error {
+	if streamURL == "" {
+		rl.setErr("空流 URL")
+		return fmt.Errorf("空流 URL")
+	}
+	rl.mu.Lock()
+	dev := rl.tv
+	rl.mu.Unlock()
+	if dev == nil {
+		err := fmt.Errorf("未选择电视，先在设备页选一台")
+		rl.setErr(err.Error())
+		return err
+	}
+	rl.logf("直推电视(无中转): %s", truncate(streamURL, 70))
+	ctrl, err := tv.NewController(dev)
+	if err != nil {
+		rl.setErr("连接电视失败: " + err.Error())
+		return err
+	}
+	if err := ctrl.Push(streamURL, title, mime); err != nil {
+		rl.setErr("投送电视失败: " + err.Error())
+		rl.logf("投送电视失败: %v", err)
+		return err
+	}
+	rl.mu.Lock()
+	rl.ctrl = ctrl
+	rl.curURL = streamURL
+	rl.curTitle = title
+	rl.ses = nil // 不再有本地 /m/ 会话
+	rl.mu.Unlock()
+	rl.setErr("")
+	rl.logf("已直推电视 %s: %s", dev.Name, truncate(streamURL, 60))
+	return nil
 }
 
 // CastStream 投一个流给电视（盗版站拿流后投屏）。
@@ -555,8 +591,9 @@ func (rl *Relay) PlayStatus() PlayState {
 		out.URI = st["uri"]
 		out.Volume = st["volume"]
 	}
-	// 标题
+	// 标题（无中转直推后没有本地会话，用 PushDirect 存的标题）
 	rl.mu.Lock()
+	out.Title = rl.curTitle
 	if rl.ses != nil {
 		out.Title = rl.ses.Src.Title
 	}
@@ -618,7 +655,7 @@ func (rl *Relay) GetLogs() []string {
 
 func extractTitle(meta string) string {
 	if meta == "" {
-		return "Bilibili"
+		return ""
 	}
 	if i := strings.Index(meta, "<dc:title>"); i > 0 {
 		rest := meta[i+len("<dc:title>"):]
@@ -626,7 +663,7 @@ func extractTitle(meta string) string {
 			return rest[:j]
 		}
 	}
-	return "Bilibili"
+	return ""
 }
 
 // guessMime 猜测上游 MIME。HLS 必须用 Content-Type 判断（抖音 URL

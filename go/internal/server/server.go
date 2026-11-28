@@ -5,7 +5,10 @@ package server
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"embed"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +17,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -193,21 +197,7 @@ func New(opts Options) *Instance {
 		}
 		http.NotFound(w, rq)
 	})
-	// mock 影视详情页（方向B 测试：模拟 sandat 结构：video meta + playlist 容器 + 集数链接）。
-	// 不依赖真实站，验证 点结果→子窗口渲染→DetectVideoPage→Extract→显示集数 链路。
-	mux.HandleFunc("/mock", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		var b strings.Builder
-		b.WriteString(`<!DOCTYPE html><html><head><title>《真情在线观看》_mock</title>`)
-		b.WriteString(`<meta name="video:class" content="香港"><meta property="og:type" content="video"></head><body>`)
-		b.WriteString(`<div id="playlist1" class="tab-pane fade in active clearfix"><ul class="aa-content__playlist clearfix">`)
-		for i := 1; i <= 20; i++ {
-			fmt.Fprintf(&b, `<li><a href="/p/mock-1-%d.html" title="真情第%02d集">第%02d集</a></li>`, i, i, i)
-		}
-		b.WriteString(`</ul></div></body></html>`)
-		io.WriteString(w, b.String())
-	})
-	mux.Handle("/m/", ms.Handler())
+	// 无内部中转：拿流后把真 URL 直推电视，不再有 /m/ 本地会话。
 	mux.HandleFunc("/favicon.ico", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -263,16 +253,59 @@ func New(opts Options) *Instance {
 				}
 				// 存到 inst.sniffMedia[u] 供后续 /api/sniff/media 取（或前端二次拉）
 				inst.sniffMu.Lock()
-				if inst.sniffMedia == nil { inst.sniffMedia = map[string]meta.Media{} }
+				if inst.sniffMedia == nil {
+					inst.sniffMedia = map[string]meta.Media{}
+				}
 				inst.sniffMedia[u] = media
 				inst.sniffMu.Unlock()
 			}
 		}()
 	})
 
-	// 盗版站闭环：播放页 URL → 拿流(m3u8/mp4) → 投屏。妈妈操作 2 的最后一段。
+	// 嗅探元数据/封面异步补齐后从这里取：只返回真从页面提取到的，取不到就空（不造假）
+	mux.HandleFunc("/api/sniff/media", func(w http.ResponseWriter, rq *http.Request) {
+		u := rq.URL.Query().Get("url")
+		inst.sniffMu.Lock()
+		m, ok := inst.sniffMedia[u]
+		inst.sniffMu.Unlock()
+		writeJSON(w, map[string]any{"ok": ok, "media": m})
+	})
+
+	// 本地播放器专用流代理：解决 hls.js/mp4 跨域被拦（不是投屏中转，无会话）。
+	// 路径式代理：/api/stream/s/<base64url(真m3u8 URL)>/<片段名>。
+	// m3u8 里的相对片段（0000000.ts）会被浏览器解析到同一路径前缀下，
+	// 不需要 hls.js 自定义 loader（实测 subclass loader 会静默失效）。
+	mux.HandleFunc("/api/stream/s/", func(w http.ResponseWriter, rq *http.Request) {
+		parts := strings.SplitN(strings.TrimPrefix(rq.URL.Path, "/api/stream/s/"), "/", 2)
+		if len(parts) != 2 {
+			http.Error(w, "bad stream path", http.StatusBadRequest)
+			return
+		}
+		raw, err := base64.RawURLEncoding.DecodeString(parts[0])
+		if err != nil {
+			http.Error(w, "bad stream token", http.StatusBadRequest)
+			return
+		}
+		target := string(raw)
+		if parts[1] != "index.m3u8" {
+			if u, e := url.Parse(target); e == nil {
+				u.Path = path.Join(path.Dir(u.Path), parts[1])
+				target = u.String()
+			}
+		}
+		inst.proxyMedia(w, rq, target, rq.URL.Query().Get("ref"), false)
+	})
+	mux.HandleFunc("/api/stream", func(w http.ResponseWriter, rq *http.Request) {
+		target := rq.URL.Query().Get("url")
+		if target == "" {
+			http.Error(w, "missing url", http.StatusBadRequest)
+			return
+		}
+		inst.proxyMedia(w, rq, target, rq.URL.Query().Get("ref"), true)
+	})
+
+	// 拿流（本地播放用）：解析播放页 → m3u8/mp4，**不碰电视、不需要选设备**。
 	mux.HandleFunc("/api/cast", func(w http.ResponseWriter, rq *http.Request) {
-		// 注入页（站点域）跨域拿流：允许任意源（GET simple request，无需 preflight）
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		u := rq.URL.Query().Get("url")
 		title := rq.URL.Query().Get("title")
@@ -280,23 +313,46 @@ func New(opts Options) *Instance {
 			writeJSON(w, map[string]any{"ok": false, "msg": "缺少 url"})
 			return
 		}
-		// 三组件解耦：拿流+投屏收敛到媒体库组件（PirateSource），不再散调 sniff+relay。
 		src := &relay.PirateSource{
 			Rl:      inst.Relay,
 			Extract: sniff.New(sniff.Default()),
 			PlayURL: u,
 			Title:   title,
 		}
-		Logf("[cast] 拿流+投屏 url=%s title=%s", u, title)
-		st, err := src.CastWith(rq.Context())
+		Logf("[cast] 拿流(本地播放) url=%s", u)
+		st, err := src.Resolve(rq.Context())
 		if err != nil {
-			LogError("[cast] 失败 url=%s err=%v", u, err)
+			LogError("[cast] 拿流失败 url=%s err=%v", u, err)
 			writeJSON(w, map[string]any{"ok": false, "msg": err.Error()})
 			return
 		}
-		Logf("[cast] 成功 url=%s mime=%s ref=%s", st.URL, st.Mime, st.Headers["Referer"])
-		ref := st.Headers["Referer"]
-		writeJSON(w, map[string]any{"ok": true, "url": st.URL, "mime": st.Mime, "ref": ref})
+		writeJSON(w, map[string]any{"ok": true, "url": st.URL, "mime": st.Mime, "ref": st.Headers["Referer"]})
+	})
+
+	// 投屏（真投电视用）：拿流 + 真 URL 直推电视，同步返回 SOAP 结果。
+	mux.HandleFunc("/api/cast/push", func(w http.ResponseWriter, rq *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		u := rq.URL.Query().Get("url")
+		title := rq.URL.Query().Get("title")
+		if u == "" {
+			writeJSON(w, map[string]any{"ok": false, "msg": "缺少 url"})
+			return
+		}
+		src := &relay.PirateSource{
+			Rl:      inst.Relay,
+			Extract: sniff.New(sniff.Default()),
+			PlayURL: u,
+			Title:   title,
+		}
+		Logf("[cast/push] 拿流+直推 url=%s title=%s", u, title)
+		st, err := src.CastWith(rq.Context())
+		if err != nil {
+			LogError("[cast/push] 失败 url=%s err=%v", u, err)
+			writeJSON(w, map[string]any{"ok": false, "msg": err.Error()})
+			return
+		}
+		Logf("[cast/push] 已直推电视 url=%s mime=%s", st.URL, st.Mime)
+		writeJSON(w, map[string]any{"ok": true, "url": st.URL, "mime": st.Mime, "direct": true})
 	})
 
 	// 搜索历史（搜索记录：点击重搜；播放记录不在这——归媒体库继续观看）
@@ -327,7 +383,7 @@ func New(opts Options) *Instance {
 			return
 		}
 		// HTTP-first：纯 HTTP 搜搜索引擎（baidu 带 BDUSS 过验证 → JSON 直解资源站 URL）
-			engName := rq.URL.Query().Get("engine") // 用户选的引擎（单引擎）
+		engName := rq.URL.Query().Get("engine") // 用户选的引擎（单引擎）
 		if engName == "" {
 			engName = "baidu" // 默认
 		}
@@ -486,15 +542,19 @@ func New(opts Options) *Instance {
 
 	// 收藏/取消收藏
 	mux.HandleFunc("/api/library/fav", func(w http.ResponseWriter, rq *http.Request) {
-		title := rq.URL.Query().Get("title")
 		u := rq.URL.Query().Get("url")
-		if title == "" || u == "" {
-			writeJSON(w, map[string]any{"ok": false, "msg": "缺少 title/url"})
+		if u == "" {
+			writeJSON(w, map[string]any{"ok": false, "msg": "缺少 url"})
 			return
 		}
 		if rq.URL.Query().Get("unfav") == "1" {
 			inst.Library.Unfav(u)
 			writeJSON(w, map[string]any{"ok": true, "fav": false})
+			return
+		}
+		title := rq.URL.Query().Get("title")
+		if title == "" {
+			writeJSON(w, map[string]any{"ok": false, "msg": "缺少 title"})
 			return
 		}
 		poster := rq.URL.Query().Get("poster")
@@ -688,11 +748,90 @@ func writeJSON(w http.ResponseWriter, v any) {
 }
 
 // /api/poster?url=<封面图>&ref=<站点域名> 代理封面图（绕过防盗链：带站点 Referer）。
+// proxyMedia 轻量本地流代理（CORS + 防盗链），rewriteM3U8 控制是否把清单相对片段改成绝对 URL。
+func (inst *Instance) proxyMedia(w http.ResponseWriter, rq *http.Request, target, ref string, rewriteM3U8 bool) {
+	req, err := http.NewRequestWithContext(rq.Context(), http.MethodGet, target, nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if rg := rq.Header.Get("Range"); rg != "" {
+		req.Header.Set("Range", rg)
+	}
+	req.Header.Set("User-Agent", sniff.Default().UA)
+	if ref == "" {
+		if uu, err := url.Parse(target); err == nil {
+			ref = uu.Scheme + "://" + uu.Host + "/"
+		}
+	}
+	req.Header.Set("Referer", ref)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Cache-Control", "no-store")
+	for _, h := range []string{"Content-Type", "Content-Length", "Accept-Ranges", "Content-Range"} {
+		if v := resp.Header.Get(h); v != "" {
+			w.Header().Set(h, v)
+		}
+	}
+	// m3u8 清单里的片段是相对路径（0000000.ts），经代理后会被浏览器解析到
+	// 本地 /0000000.ts（404）。改写成绝对远程 URL，前端 loader 再逐条包回代理。
+	isM3U8 := strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "mpegurl") || strings.HasSuffix(strings.ToLower(target), ".m3u8")
+	if rewriteM3U8 && isM3U8 && resp.StatusCode == http.StatusOK {
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		base, _ := url.Parse(target)
+		var sb strings.Builder
+		for _, line := range strings.Split(string(body), "\n") {
+			t := strings.TrimRight(line, "\r")
+			if t != "" && !strings.HasPrefix(t, "#") && base != nil {
+				if ref, e := url.Parse(strings.TrimSpace(t)); e == nil {
+					t = base.ResolveReference(ref).String()
+				}
+			}
+			sb.WriteString(t + "\n")
+		}
+		w.Header().Del("Content-Length")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, sb.String())
+		return
+	}
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
+
+}
+
 func (inst *Instance) posterProxy(w http.ResponseWriter, rq *http.Request) {
 	u := rq.URL.Query().Get("url")
 	if u == "" {
 		http.Error(w, "missing url", http.StatusBadRequest)
 		return
+	}
+	// 封面落盘缓存：收藏后即使原站挂了/防盗链变了，媒体库仍能显示真封面。
+	// key = sha256(海报URL)，文件存 dataDir/poster-cache/<hex>，meta 存 Content-Type。
+	cacheDir := filepath.Join(inst.DataDir, "poster-cache")
+	sum := sha256.Sum256([]byte(u))
+	key := hex.EncodeToString(sum[:])
+	imgPath := filepath.Join(cacheDir, key)
+	metaPath := imgPath + ".type"
+	if b, err := os.ReadFile(metaPath); err == nil {
+		if f, ferr := os.Open(imgPath); ferr == nil {
+			defer f.Close()
+			if ct := strings.TrimSpace(string(b)); ct != "" {
+				w.Header().Set("Content-Type", ct)
+			}
+			w.Header().Set("Cache-Control", "public, max-age=604800")
+			w.Header().Set("X-Poster-Cache", "hit")
+			_, _ = io.Copy(w, f)
+			return
+		}
 	}
 	ref := rq.URL.Query().Get("ref")
 	if ref == "" {
@@ -713,12 +852,29 @@ func (inst *Instance) posterProxy(w http.ResponseWriter, rq *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
-	if ct := resp.Header.Get("Content-Type"); ct != "" {
+	if resp.StatusCode != http.StatusOK {
+		http.Error(w, "upstream "+resp.Status, http.StatusBadGateway)
+		return
+	}
+	ct := resp.Header.Get("Content-Type")
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20)) // 封面最多 8MB
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	if len(body) > 0 && strings.HasPrefix(ct, "image/") {
+		_ = os.MkdirAll(cacheDir, 0o755)
+		_ = os.WriteFile(imgPath+".tmp", body, 0o644)
+		_ = os.Rename(imgPath+".tmp", imgPath)
+		_ = os.WriteFile(metaPath, []byte(ct), 0o644)
+	}
+	if ct != "" {
 		w.Header().Set("Content-Type", ct)
 	}
-	w.Header().Set("Cache-Control", "public, max-age=86400")
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	w.Header().Set("Cache-Control", "public, max-age=604800")
+	w.Header().Set("X-Poster-Cache", "miss")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
 }
 
 // configPath 搜索配置路径（config.json）。

@@ -230,7 +230,7 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
 .bub-empty{grid-column:1/-1;font-size:11px;color:var(--dim2);text-align:center;padding:14px;background:var(--bg2);border-radius:9px;line-height:1.5}
 
 /* btn */
-.btn{border:0;border-radius:7px;padding:6px 12px;font-size:11px;font-weight:700;cursor:pointer;transition:transform .1s}
+.btn{border:0;border-radius:8px;min-height:38px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;transition:transform .1s}
 .btn:active{transform:scale(.94)}
 .btn.gh{background:transparent;border:1px solid var(--line);color:var(--dim);display:block;width:100%;margin-top:8px}
 .btn.gh:active{border-color:var(--dim);color:var(--fg)}
@@ -248,8 +248,14 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
 .logs div{white-space:pre-wrap;word-break:break-all}
 
 /* toast */
-#toast{min-height:15px;font-size:11px;text-align:center;margin-top:6px}
+/* toast 全局固定：之前嵌在设备页，离开设备页所有提示都看不见 */
+#toast{position:fixed;left:50%;bottom:100px;transform:translateX(-50%);z-index:95;max-width:88vw;padding:9px 16px;border-radius:20px;background:rgba(20,23,32,.94);border:1px solid var(--line);font-size:12px;text-align:center;display:none;backdrop-filter:blur(8px)}
+#toast:not(:empty){display:block}
 #toast .ok{color:var(--ok)}#toast .err{color:var(--acc)}
+/* 层叠页（遥控器/设备）：不在底部导航，靠返回按钮退回来源页 */
+.layer-bar{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.layer-bar .btn{width:auto;margin:0;flex:0 0 auto}
+.layer-bar b{font-size:14px}
 
 /* ── 底部导航 ── */
 .tabbar{
@@ -265,6 +271,26 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
 .tab .tbadge{position:relative}
 .tab .tbadge::after{content:'';position:absolute;top:-3px;right:-3px;width:7px;height:7px;border-radius:50%;background:var(--acc)}
 
+/* 日志：两级滚动（页面外层照旧 + 日志区内层独立滚动），滚动条常驻可见 */
+.logbox{
+  height:calc(100vh - 250px);min-height:240px;
+  overflow-y:auto;overflow-x:hidden;
+  border:1px solid var(--line);border-radius:10px;
+  background:var(--bg2);padding:10px 12px;
+  scrollbar-width:thin;scrollbar-color:var(--dim2) transparent;
+}
+.logbox::-webkit-scrollbar{width:8px}
+.logbox::-webkit-scrollbar-track{background:rgba(255,255,255,.04);border-radius:8px}
+.logbox::-webkit-scrollbar-thumb{background:var(--dim2);border-radius:8px}
+.logbox::-webkit-scrollbar-thumb:hover{background:var(--dim)}
+.logbox > div{font-size:11px;line-height:1.65;padding:1px 0;white-space:pre-wrap;word-break:break-all}
+/* 日志工具栏：输入/下拉/清空/暂停统一 40px 高，图标按钮给足点击面积 */
+.log-toolbar{display:flex;gap:8px;margin-bottom:8px;align-items:center}
+.log-toolbar .inp{height:40px;min-height:40px}
+.log-toolbar select{max-width:90px;flex:0 0 auto;height:40px;font-size:12px}
+.log-toolbar .btn{height:40px;min-height:40px;min-width:58px;padding:0 14px;font-size:13px;border:1px solid var(--line);background:var(--card2);color:var(--fg);border-radius:10px}
+.log-toolbar #log-pause-btn{min-width:48px;font-size:16px;line-height:1}
+
 .hidden{display:none!important}
 
 /* ═══════════ 媒体库（移植 OnScreen：继续观看行 + 海报墙）═══ */
@@ -273,14 +299,20 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
 .row-scroll{display:flex;gap:10px;overflow-x:auto;padding-bottom:4px;scrollbar-width:none}
 .row-scroll::-webkit-scrollbar{display:none}
 /* 继续观看大卡（学 OnScreen ContinueWatching）*/
-.continue-card{flex:0 0 auto;width:200px;cursor:pointer}
-.continue-img{width:200px;height:112px;border-radius:10px;background:var(--card2);border:1px solid var(--line);position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;font-size:38px;font-weight:800;color:var(--acc)}
-.continue-progress{position:absolute;left:0;bottom:0;height:3px;background:var(--acc)}
-.continue-title{font-size:12px;font-weight:600;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.continue-card{flex:0 0 auto;width:200px;position:relative}
+.continue-img{width:200px;height:112px;border-radius:10px;background:var(--card2);border:1px solid var(--line);position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;font-size:38px;font-weight:800;color:var(--acc);cursor:pointer}
+/* 进度条带底槽：0% 不画，避免“没看也满格”的假进度 */
+.continue-progress-track,.poster-progress-track{position:absolute;left:0;right:0;bottom:0;height:4px;background:rgba(0,0,0,.5)}
+.continue-progress,.poster-progress{height:100%;background:var(--acc)}
+.continue-title{font-size:12px;font-weight:600;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
 .continue-sub{font-size:10px;color:var(--dim);margin-top:2px}
+.continue-dismiss{position:absolute;top:5px;right:5px;z-index:2;width:26px;height:26px;border-radius:50%;border:1px solid var(--line);background:rgba(0,0,0,.7);color:#fff;font-size:12px;line-height:1;cursor:pointer}
+.continue-dismiss:disabled{opacity:.5;cursor:progress}
+.lib-empty{padding:28px 4px;text-align:center;color:var(--dim);font-size:12px}
+.lib-empty .btn{margin-top:12px}
 /* 海报卡（学 OnScreen Row/LibraryRow）*/
 .poster-card{flex:0 0 auto;width:110px;cursor:pointer}
-.poster-img{width:110px;height:155px;border-radius:10px;background:var(--card2);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:36px;font-weight:800;color:var(--acc);overflow:hidden}
+.poster-img{width:110px;height:155px;border-radius:10px;background:var(--card2);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:36px;font-weight:800;color:var(--acc);overflow:hidden;position:relative}
 .poster-real{width:100%;height:100%;object-fit:cover}
 .continue-real{width:100%;height:100%;object-fit:cover}
 .poster-unfav{color:var(--dim);font-size:12px;margin-left:6px;padding:2px 4px}
@@ -289,9 +321,12 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
 .poster-sub{font-size:9px;color:var(--dim);margin-top:1px}
 
 /* ═══════════ 详情浮层（学 OnScreen ItemDetail：封面+标题+集数网格）═══ */
-.detail-overlay{position:fixed;inset:0;z-index:60;background:var(--bg);display:flex;flex-direction:column;overflow-y:auto}
-.detail-cover{height:190px;flex-shrink:0;background:linear-gradient(135deg,var(--card2),var(--bg2));border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:72px;font-weight:900;color:var(--acc)}
-.detail-body{flex:1;padding:14px 14px 80px;overflow-y:auto}
+.detail-overlay{position:fixed;inset:0;z-index:60;background:var(--bg);display:flex;flex-direction:column;overflow:hidden}
+/* 封面按 2:3 海报比例居中展示，不再把竖版海报裁成横条 */
+.detail-cover{height:auto;flex-shrink:0;padding:16px;background:linear-gradient(135deg,var(--card2),var(--bg2));border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:center}
+.cover-photo{width:132px;aspect-ratio:2/3;border-radius:12px;background:var(--card);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;overflow:hidden;font-size:54px;font-weight:900;color:var(--acc);box-shadow:0 8px 28px rgba(0,0,0,.35)}
+.cover-photo img{width:100%;height:100%;object-fit:cover;display:block}
+.detail-body{flex:1;min-height:0;padding:14px 14px 12px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--dim2) transparent}
 .detail-title{font-size:20px;font-weight:800;margin-bottom:5px}
 .detail-meta{font-size:11px;margin-bottom:12px}
 .detail-meta.fail{color:#ff8a8a;font-size:12px}
@@ -307,8 +342,9 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
 .detail-ep{background:var(--card2);border:1px solid var(--line);border-radius:8px;padding:9px 4px;text-align:center;cursor:pointer;font-size:11px;color:var(--dim)}
 .detail-ep:active{transform:scale(.96)}
 .detail-ep.sel{background:var(--acc-soft);border-color:var(--acc);color:var(--acc);font-weight:700}
-.detail-bar{position:fixed;left:0;right:0;bottom:0;display:flex;gap:10px;padding:10px 14px;background:linear-gradient(transparent,var(--bg) 40%);z-index:61}
-.detail-bar .btn{flex:1;height:42px;border-radius:10px;font-size:14px}
+/* 底栏是 flex last child，不 fixed：浮层内只有 detail-body 一个滚动条 */
+.detail-bar{flex-shrink:0;display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:10px 14px;background:var(--bg);border-top:1px solid var(--line)}
+.detail-bar .btn{min-height:44px;height:44px;border-radius:10px;font-size:13px;padding:0 6px}
 .detail-close-btn{background:var(--card2);color:var(--dim)}
 .detail-play-btn:disabled{opacity:.4}
 
@@ -372,6 +408,7 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
         <div class="ep-actions">
           <button class="btn pri" onclick="playEp()">▶ 投屏播放</button>
           <button class="btn gh" onclick="copyEp()">复制链接</button>
+          <button class="btn gh" id="ep-fav" onclick="favCurrent()">⭐ 收藏本剧</button>
         </div>
       </div>
     </div>
@@ -379,15 +416,6 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
   </div>
 
   <!-- ═══════════ 真实页面查看器（点击搜索结果 → WebView 渲染 → iframe 显示，不归一化/不去广告）═══ -->
-  <div class="page" id="page-viewer">
-    <div class="hdr">
-      <div class="hdr-t"><h1 id="viewer-title">正在打开…</h1></div>
-      <button class="btn gh" onclick="goPage('search')" style="font-size:12px;padding:6px 14px">✕ 返回</button>
-    </div>
-    <div id="viewer-status" class="dim" style="padding:12px;font-size:13px">正在用内置浏览器打开页面…</div>
-    <iframe id="viewer-frame" style="width:100%;height:calc(100vh - 130px);border:none;background:#fff;border-radius:10px" sandbox="allow-scripts allow-same-origin allow-popups allow-forms"></iframe>
-  </div>
-
   <!-- ═══════════ 搜索结果页（独立页，效仿 searxng 聚合）═══ -->
   <!-- ═══════════ 媒体库（移植 OnScreen UI 结构：继续观看行 + 海报墙）═══ -->
   <div class="page" id="page-library">
@@ -398,14 +426,15 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
     </div>
     <!-- 海报墙（学 OnScreen Row/LibraryRow：横向滚动海报网格）-->
     <div class="lib-sec" id="lib-poster-sec">
-      <h2>媒体库</h2>
+      <h2>媒体库 <span id="lib-total" class="dim"></span></h2>
       <div class="row-scroll" id="poster-row"></div>
     </div>
-    <div id="lib-empty" class="dim" style="padding:20px 4px;text-align:center">搜过的剧会出现在这里，点海报看集数</div>
+    <div id="lib-empty" class="lib-empty">搜过的剧会出现在这里，点海报看集数<br><button class="btn pri" onclick="goPage('search')">去搜索</button></div>
   </div>
 
   <!-- ═══════════ 操作台 ═══════════ -->
   <div class="page" id="page-dock">
+    <div class="layer-bar"><button class="btn gh" onclick="backFromLayer()">← 返回</button><b>遥控器</b></div>
     <div class="dock" id="dock">
       <div class="dock-cover">
         <div class="cover-tv">📺</div>
@@ -446,11 +475,11 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
 
   <!-- ═══════════ 设备 ═══════════ -->
   <div class="page" id="page-dev">
+    <div class="layer-bar"><button class="btn gh" onclick="backFromLayer()">← 返回</button><b>设备</b></div>
     <div class="card">
       <h2>设备</h2>
       <div class="bubbles" id="bubbles"><div class="bub-empty">加载中…</div></div>
       <button class="btn gh" onclick="rescan()">重新扫描</button>
-      <div id="toast"></div>
     </div>
   </div>
 
@@ -458,16 +487,16 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
   <div class="page" id="page-logs">
     <div class="card">
       <h2>运行日志（/api/logs）</h2>
-      <div style="display:flex;gap:8px;margin-bottom:8px;align-items:center">
+      <div class="log-toolbar">
         <input class="inp" id="log-filter" placeholder="过滤关键词（如 sniff/cast/search）" oninput="logFilter=this.value">
-        <select class="inp" id="log-level" onchange="logLevel=this.value" style="max-width:90px;height:36px;font-size:12px">
+        <select class="inp" id="log-level" onchange="logLevel=this.value">
           <option value="">全部</option>
           <option value="INFO">INFO</option>
           <option value="WARN">WARN</option>
           <option value="ERROR">ERROR</option>
         </select>
-        <button class="btn" onclick="clearLogs()" style="height:36px;padding:0 12px;font-size:12px">清空</button>
-        <button class="btn" id="log-pause-btn" onclick="toggleLogPause()">⏸</button>
+        <button class="btn" onclick="clearLogs()">清空</button>
+        <button class="btn" id="log-pause-btn" onclick="toggleLogPause()" title="暂停/继续刷新">⏸</button>
       </div>
       <div class="logbox" id="log-list"><div class="dim">加载中…</div></div>
     </div>
@@ -503,6 +532,7 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
     <button class="btn gh detail-play-btn" id="detail-local" onclick="playEpLocal()" disabled>📱 本地播放</button>
     <button class="btn gh detail-play-btn" id="detail-play" onclick="playEp()" disabled>▶ 投屏</button>
     <button class="btn gh detail-play-btn" id="detail-copy" onclick="copyEp()" disabled>📋 复制</button>
+    <button class="btn gh detail-play-btn" id="detail-fav" onclick="favCurrent()">⭐ 收藏</button>
   </div>
 </div>
 
@@ -510,6 +540,7 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
 <div id="player-overlay" class="player-overlay hidden">
   <div class="player-bar">
     <span class="player-title" id="player-title">…</span>
+    <button class="player-btn" id="pc-cast" onclick="castFromPlayer()" title="投到电视（先选设备）" style="color:var(--acc)">📺</button>
     <button class="player-btn" id="pc-prev" onclick="prevEp()" disabled>⏮</button>
     <button class="player-btn" id="pc-next" onclick="nextEp()" disabled>⏭</button>
     <button class="player-btn" onclick="closePlayer()">✕</button>
@@ -518,12 +549,12 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
   <button id="player-tap" class="player-tap hidden" onclick="playTap()">▶ 点这里开始播放</button>
 </div>
 
-<!-- ═══════════ 底部导航 ═══════════ -->
+<div id="toast"></div>
+
+<!-- ═══════════ 底部导航（层叠页 dock/dev 不进导航，靠流程进入）═══════════ -->
 <nav class="tabbar">
   <div class="tab active" data-page="search" onclick="goPage('search')"><span class="ti">🔍</span><span class="tt">搜索</span></div>
   <div class="tab" data-page="library" onclick="goPage('library')"><span class="ti">🎬</span><span class="tt">媒体库</span></div>
-  <div class="tab" data-page="dock" onclick="goPage('dock')"><span class="ti tbadge" id="tab-dock-ic">🎮</span><span class="tt">遥控器</span></div>
-  <div class="tab" data-page="dev" onclick="goPage('dev')"><span class="ti">📺</span><span class="tt">设备</span></div>
   <div class="tab" data-page="set" onclick="goPage('set')"><span class="ti">⚙️</span><span class="tt">设置</span></div>
   <div class="tab" data-page="logs" onclick="goPage('logs')"><span class="ti">📋</span><span class="tt">日志</span></div>
 </nav>
@@ -533,7 +564,10 @@ const SELF_NAME = "MyCast";
 
 // ── 页面切换 ──
 let curPage = 'home';
+let layerFrom = 'search'; // 层叠页（遥控器/设备）返回时回哪个主页面
 function goPage(p) {
+  // 进层叠页时记住来源；从别的层叠页跳过来时保留原来源
+  if((p === 'dock' || p === 'dev') && ['search','library','set','logs'].includes(curPage)) layerFrom = curPage;
   curPage = p;
   document.querySelectorAll('.page').forEach(x => x.classList.toggle('active', x.id === 'page-'+p));
   document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x.dataset.page === p));
@@ -542,6 +576,7 @@ function goPage(p) {
   if(p === 'logs') pollLogs(); // 进日志页刷日志
   if(p === 'search') loadSearchHistory(); // 进搜索页刷搜索记录
 }
+function backFromLayer() { goPage(layerFrom); }
 
 // ═══════════ 搜索结果页（独立页，效仿 searxng 聚合）═══════
 // mock 数据：先给用户看格式（标题/URL/摘要/引擎），后续接真搜索
@@ -798,7 +833,12 @@ async function sniff(u, title) {
   try {
     const d = await apiGet('/api/sniff?url='+encodeURIComponent(u), 45000);
     netOk();
-    if(d.ok && d.episodes && d.episodes.length) { renderEpsGrid(d.episodes, title || d.url || ''); toast('找到 '+(d.episodes||[]).length+' 集'); return; }
+    if(d.ok && d.episodes && d.episodes.length) {
+      window.__detailURL = u; window.__detailTitle = title || u; window.__curMedia = null;
+      syncFavButtons((window.__libItems || []).some(x => x.url === u));
+      loadMeta(u); // 真简介/真封面异步补齐，收藏时能带走真海报
+      renderEpsGrid(d.episodes, title || d.url || ''); toast('找到 '+(d.episodes||[]).length+' 集'); return;
+    }
     // 失败（/api/sniff 返回 200+ok:false，看 d.ok）——明确反馈
     if(d.need_browser) { epFail('该站 JS 反爬（需浏览器内核），本路径纯 HTTP 解不了，换一条结果试试'); return; }
     const m=d.msg||'';
@@ -843,25 +883,50 @@ async function loadLibrary() {
     const cRow = document.getElementById('continue-row');
     const pRow = document.getElementById('poster-row');
     const empty = document.getElementById('lib-empty');
-    document.getElementById('lib-continue-sec').style.display = items.length ? '' : 'none';
-    document.getElementById('lib-poster-sec').style.display = items.length ? '' : 'none';
+    const cSec = document.getElementById('lib-continue-sec');
+    const pSec = document.getElementById('lib-poster-sec');
+    pSec.style.display = items.length ? '' : 'none';
     empty.style.display = items.length ? 'none' : '';
-    if(!items.length) return;
-    // 继续观看行：前 3 条大卡（学 ContinueWatching：大图+进度+点击续投屏）
-    cRow.innerHTML = items.slice(0,3).map(it=>{
-      const p = getPlayPos(it.url);
-      return '<div class="continue-card" onclick="openDetail(\''+escJS(it.url)+'\',\''+escJS(it.title)+'\')">'+
-      '<div class="continue-img">'+posterImg(it,true)+'<div class="continue-progress" style="width:'+(p>0?p:100)+'%"></div></div>'+
-      '<div class="continue-title">'+it.title+'</div><div class="continue-sub">'+it.time+' · '+(p>0?('看到 '+p+'%'):'点开续看')+'</div></div>';
+    document.getElementById('lib-total').textContent = items.length ? ('共 '+items.length+' 条') : '';
+    if(!items.length) { cSec.style.display = 'none'; return; }
+
+    // 学 OnScreen progressPct：没有真实 offset/duration 就不画进度，不造假 100%。
+    // 继续观看只放真有进度的，按进度倒序（OnScreen 空行直接隐藏）。
+    const pctOf = it => Math.min(100, Math.max(0, Number(it.progress) || 0));
+    const watched = items.filter(it => pctOf(it) > 0).sort((a,b) => pctOf(b)-pctOf(a)).slice(0,6);
+    cSec.style.display = watched.length ? '' : 'none';
+    cRow.innerHTML = watched.map(it=>{
+      const p = pctOf(it);
+      const sub = (it.position && it.duration) ? (it.position+' / '+it.duration) : ('看到 '+Math.round(p)+'%');
+      return '<div class="continue-card">'+
+      '<div class="continue-img" onclick="openDetail(\''+escJS(it.url)+'\',\''+escJS(it.title)+'\')">'+posterImg(it,true)+
+      '<div class="continue-progress-track"><div class="continue-progress" style="width:'+p+'%"></div></div></div>'+
+      '<button class="continue-dismiss" title="标为未看" onclick="dismissProgress(event,\''+escJS(it.url)+'\')">✕</button>'+
+      '<div class="continue-title" onclick="openDetail(\''+escJS(it.url)+'\',\''+escJS(it.title)+'\')">'+it.title+'</div>'+
+      '<div class="continue-sub">'+sub+' · '+Math.round(p)+'%</div></div>';
     }).join('');
-    // 海报墙：全部横向滚动（学 Row/LibraryRow：海报网格）
-    pRow.innerHTML = items.map(it=>
-      '<div class="poster-card">'+
-      '<div class="poster-img" onclick="openDetail(\''+escJS(it.url)+'\',\''+escJS(it.title)+'\')">'+posterImg(it)+'</div>'+
-      '<div class="poster-title">'+it.title+'</div><div class="poster-sub">'+it.time+
-      ' <span class="poster-unfav" onclick="event.stopPropagation();unfav(\''+escJS(it.url)+'\')">✕</span></div></div>'
-    ).join('');
-  } catch(e){}
+
+    // 海报墙：全部横向滚动，卡片底部细进度条一眼看出看过没
+    pRow.innerHTML = items.map(it=>{
+      const p = pctOf(it);
+      return '<div class="poster-card">'+
+      '<div class="poster-img" onclick="openDetail(\''+escJS(it.url)+'\',\''+escJS(it.title)+'\')">'+posterImg(it)+
+      (p>0 ? '<div class="poster-progress-track"><div class="poster-progress" style="width:'+p+'%"></div></div>' : '')+'</div>'+
+      '<div class="poster-title">'+it.title+'</div><div class="poster-sub">'+(it.time||'')+
+      ' <span class="poster-unfav" onclick="event.stopPropagation();unfav(\''+escJS(it.url)+'\')">✕</span></div></div>';
+    }).join('');
+  } catch(e) { toast('媒体库加载失败: '+e.message, false); netFail('媒体库'); }
+}
+
+// 学 OnScreen dismissContinue：先乐观移除卡片，失败再回滚重刷
+async function dismissProgress(ev, url) {
+  const card = ev && ev.target && ev.target.closest ? ev.target.closest('.continue-card') : null;
+  if(card) card.style.display = 'none';
+  try {
+    const d = await apiGet('/api/library/progress?url='+encodeURIComponent(url)+'&progress=0&position=&duration=');
+    if(d.ok === false) throw new Error(d.msg || '标记失败');
+    toast('已标为未看'); loadLibrary();
+  } catch(e) { toast('标记失败: '+e.message, false); loadLibrary(); }
 }
 
 // 海报图：有真图用 /api/poster 代理（防盗链），否则占位字
@@ -884,10 +949,15 @@ function escJS(s) { return String(s).replace(/'/g,"\\'"); }
 // 详情（学 OnScreen ItemDetail）：点海报 → 打开详情浮层（封面+标题+集数网格）
 function openDetail(url, title) {
   if(!url) { toast('无链接', false); return; }
-  // 打开浮层
+  // 打开浮层：锁住背后页面滚动，浮层内只留一个滚动条
   const ov = document.getElementById('detail-overlay');
   ov.classList.remove('hidden');
-  document.getElementById('detail-cover').textContent = libEmoji(title);
+  document.body.style.overflow = 'hidden';
+  window.__detailURL = url;
+  window.__detailTitle = title || '';
+  window.__curMedia = null;
+  document.getElementById('detail-cover').innerHTML = '<div class="cover-photo">'+escapeHtml(libEmoji(title))+'</div>';
+  syncFavButtons((window.__libItems || []).some(x => x.url === url));
   document.getElementById('detail-title').textContent = title || '…';
   document.getElementById('detail-meta').textContent = '提取集数中…';
   document.getElementById('detail-eps').innerHTML = '';
@@ -908,8 +978,8 @@ async function loadDetail(url, title) {
     const d = await apiGet('/api/sniff?url='+encodeURIComponent(url), 45000);
     netOk();
     if(d.ok && d.episodes && d.episodes.length) {
-      renderMedia(d.media);
       renderDetailEps(d.episodes, title||'');
+      loadMeta(url); // 元数据/封面异步补齐：只写真提取到的，绝不编
       return;
     }
     meta.classList.add('fail');
@@ -923,9 +993,56 @@ async function loadDetail(url, title) {
   }
 }
 
+// 真元数据：后端从详情页 JSON-LD/meta/苹果CMS 提取，异步写好后轮询取（最多约 7s）
+async function loadMeta(url) {
+  for(let i=0;i<6;i++) {
+    try {
+      const d = await apiGet('/api/sniff/media?url='+encodeURIComponent(url), 5000);
+      if(d.ok && d.media) { window.__curMedia = d.media; renderMedia(d.media); return; }
+    } catch(e) { /* 还没好，继续等 */ }
+    await new Promise(r=>setTimeout(r,1200));
+  }
+  renderMedia(null); // 抓不到就不显示，不造假简介/封面
+}
+
+// 手动收藏：只有用户点⭐才进媒体库；封面用真提取到的 poster
+function syncFavButtons(faved) {
+  const d = document.getElementById('detail-fav');
+  if(d) { d.textContent = faved ? '★ 已收藏' : '⭐ 收藏'; d.disabled = faved; }
+  const e = document.getElementById('ep-fav');
+  if(e) { e.textContent = faved ? '★ 已收藏' : '⭐ 收藏本剧'; e.disabled = faved; }
+}
+
+async function favCurrent() {
+  const url = window.__detailURL;
+  const title = window.__detailTitle || document.getElementById('detail-title').textContent;
+  if(!url) { toast('无链接，无法收藏', false); return; }
+  // 用户点得快也尽量拿到真封面： meta 异步没回来就现取一次
+  if(!window.__curMedia) {
+    try { const md = await apiGet('/api/sniff/media?url='+encodeURIComponent(url), 5000); if(md.ok && md.media) window.__curMedia = md.media; } catch(e) {}
+  }
+  const poster = (window.__curMedia && window.__curMedia.poster) || '';
+  try {
+    const d = await apiGet('/api/library/fav?title='+encodeURIComponent(title)+
+      '&url='+encodeURIComponent(url)+'&poster='+encodeURIComponent(poster)+
+      '&source='+encodeURIComponent(new URL(url).hostname));
+    if(d.ok === false) { toast(d.msg||'收藏失败', false); return; }
+    syncFavButtons(true);
+    toast('已收藏' + (poster ? '（含真封面）' : ''));
+    loadLibrary();
+  } catch(e) { toast('收藏失败: '+e.message, false); netFail('收藏'); }
+}
+
 // 渲染元数据卡片（学百度：主演/导演/地区/类型分行 + 简介可展开）
 function renderMedia(m) {
   const card = document.getElementById('detail-card');
+  // 真封面独立于文字元数据：只有 poster 也要显示（早退前先处理）
+  const cov = document.getElementById('detail-cover');
+  if(m && m.poster) {
+    cov.innerHTML = '<div class="cover-photo"><img src="/api/poster?url='+encodeURIComponent(m.poster)+'&ref='+encodeURIComponent(window.__detailURL||'')+'" alt="" onerror="this.parentNode.textContent=\'?\'"></div>';
+  } else {
+    cov.innerHTML = '<div class="cover-photo">'+escapeHtml(libEmoji(window.__detailTitle || ''))+'</div>';
+  }
   if (!m || (!m.actors && !m.director && !m.region && !m.year && !m.type && !m.synopsis)) {
     card.classList.add('hidden');
     return;
@@ -975,6 +1092,7 @@ function selectDetailEp(index) {
 
 function closeDetail() {
   document.getElementById('detail-overlay').classList.add('hidden');
+  document.body.style.overflow = '';
   selEp = null;
 }
 
@@ -999,9 +1117,14 @@ function playLocal(url, mime, title, epsCtx) {
   if(artHls) { artHls.destroy(); artHls = null; }
   const isHLS = (mime||'').indexOf('mpegurl')>=0 || (mime||'').indexOf('m3u8')>=0 || /\.m3u8/.test(url);
   if(!window.Artplayer) { toast('播放器资源未加载（/static/artplayer.min.js）', false); return; }
+  // 本地播放不走投屏中转，但远程 m3u8/ts 有 CORS + 防盗链：走轻量 /api/stream 代理。
+  const b64url = u => btoa(unescape(encodeURIComponent(u))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+  // 路径式：相对片段会解析到同一 /api/stream/s/<token>/ 前缀，服务端按片段名代理
+  const proxied = u => '/api/stream/s/'+b64url(u)+'/index.m3u8?ref='+encodeURIComponent(window.__streamRef||'');
+  const proxiedDirect = u => '/api/stream?url='+encodeURIComponent(u)+'&ref='+encodeURIComponent(window.__streamRef||'');
   art = new Artplayer({
     container: '#artplayer-app',
-    url: url,
+    url: isHLS ? url : proxiedDirect(url),
     title: title || '',
     type: isHLS ? 'm3u8' : undefined,
     customType: {
@@ -1013,8 +1136,8 @@ function playLocal(url, mime, title, epsCtx) {
             lowLatencyMode: false,
             maxBufferLength: IS_WEBKITGTK ? 10 : 30,
           });
-          artHls.loadSource(src);
           artHls.attachMedia(video);
+          artHls.loadSource(proxied(src)); // 路径式代理；必须先 attachMedia，否则不发清单请求
           artHls.on(Hls.Events.MANIFEST_PARSED, ()=>{
             video.play().catch(err=>{
               // WebKitGTK 异步拿流后失去了用户手势 → 自动播放被拒，画面卡在 loading 圈。
@@ -1137,7 +1260,7 @@ function playEpLocalCtx(ep, epTitle) {
   apiGet('/api/cast?url='+encodeURIComponent(ep.url)+'&title='+encodeURIComponent(title), 35000)
     .then(d=>{
       castBusy = false; netOk();
-      if(d.ok) { autoFav(title, ep.url); playLocal(d.url, d.mime, title, { eps: epsData, index: ep.index }); }
+      if(d.ok) { if(d.ref) window.__streamRef = d.ref; playLocal(d.url, d.mime, title, { eps: epsData, index: ep.index }); }
       else { toast(d.msg||'拿流失败', false); if(dtl) dtl.textContent='拿流失败：'+(d.msg||'未知'); }
     })
     .catch(e=>{
@@ -1151,6 +1274,7 @@ function closePlayer() {
   if(art) { art.destroy(); art = null; }
   if(artHls) { artHls.destroy(); artHls = null; }
   document.body.style.overflow = '';
+  pendingCast = null; // 手动关闭播放器 = 放弃本次投屏意图
   const tap = document.getElementById('player-tap'); if(tap) tap.classList.add('hidden');
   document.getElementById('player-overlay').classList.add('hidden');
 }
@@ -1196,38 +1320,53 @@ function selectEp(idx) {
   document.getElementById('ep-dt').textContent = '第'+e.index+'集 · '+e.title;
 }
 function copyEp() { if(selEp && navigator.clipboard) { navigator.clipboard.writeText(selEp.url); toast('已复制: '+selEp.url); } }
+// ── 投屏分层：播放器点📺 → 设备页选电视 → 选完才真投屏 → 进遥控器页 ──
+let pendingCast = null; // 待投屏的当前集（播放器点📺时记下）
+function castFromPlayer() {
+  if(!selEp) { toast('先选一集再投屏', false); return; }
+  const raw = document.getElementById('player-title')?.textContent || '';
+  const title = raw.replace(/\s*第\d+集$/, '') || '剧集';
+  closePlayer(); // 关播放器（会清 pendingCast），下面再设置
+  pendingCast = { url: selEp.url, title: title, index: selEp.index };
+  goPage('dev');
+  toast('选一台电视，选完自动投屏');
+}
+
 async function playEp() {
   if(!selEp || castBusy) return;
-  // 先确认已选电视：/api/cast 只负责拿流（本地播放也要用），没电视时后端只记日志，
-  // 前端不能报"已投屏"（假成功）。
-  try {
-    const st = await apiGet('/api/status');
-    if(!st.status || !st.status.tv) { toast('还没选电视，点底部「设备」选一台再投', false); return; }
-  } catch(e) { toast('无法确认电视状态: '+e.message, false); netFail('状态检查'); return; }
-  // 标题：详情浮层优先（媒体库点开），否则首页集数卡
   const dt = document.getElementById('detail-title');
   const base = (dt && !dt.classList.contains('hidden') && dt.textContent && dt.textContent!=='…') ? dt.textContent : (document.getElementById('ep-title').textContent || '剧集');
   const title = String(base).replace(/\d+集夹$/, '') + ' 第'+selEp.index+'集';
-  castBusy = true;
-  toast('拿流中…');
-  apiGet('/api/cast?url='+encodeURIComponent(selEp.url)+'&title='+encodeURIComponent(title), 35000)
-    .then(d=>{
-      castBusy = false; netOk();
-      if(d.ok) { autoFav(title, selEp.url); castPosURL = selEp.url; toast('已投屏第'+selEp.index+'集'); closeDetail(); goPage('dock'); }
-      else toast('拿流失败：'+(d.msg||'未知'), false);
-    })
-    .catch(e=>{
-      castBusy = false; netFail('拿流');
-      toast(/abort/i.test(e.name||'') ? '拿流超时（35s），换一集或换一条结果' : '拿流网络错误', false);
-    });
+  doCast({ url: selEp.url, title: title, index: selEp.index });
 }
 
-// ── 播放后自动记入媒体库（播放记录归媒体库）──
-function autoFav(title, url) {
-  if(!title || !url) return;
-  const src = window.location.hostname;
-  fetch('/api/library/fav?title='+encodeURIComponent(title)+'&url='+encodeURIComponent(url)+'&source='+encodeURIComponent(src))
-    .catch(()=>{});
+// 真正投屏：确认已选电视 → 拿流 → 投出去 → 才进遥控器页
+async function doCast(info) {
+  if(!info || !info.url || castBusy) return;
+  try {
+    const st = await apiGet('/api/status');
+    if(!st.status || !st.status.tv) {
+      // 先在设备页选电视：记住这一集，选完自动接着投屏，不用再点第二次
+      pendingCast = info;
+      closeDetail(); // 浮层是 fixed 盖在最上层，不关掉就看不见设备页
+      toast('还没选电视，选一台后自动投屏');
+      goPage('dev');
+      return;
+    }
+  } catch(e) { toast('无法确认电视状态: '+e.message, false); netFail('状态检查'); return; }
+  castBusy = true;
+  toast('拿流中…');
+  try {
+    const d = await apiGet('/api/cast/push?url='+encodeURIComponent(info.url)+'&title='+encodeURIComponent(info.title), 35000);
+    castBusy = false; netOk();
+    if(d.ok) {
+      castPosURL = info.url;
+      toast('已投屏第'+(info.index||'')+'集'); closeDetail(); goPage('dock');
+    } else toast('拿流失败：'+(d.msg||'未知'), false);
+  } catch(e) {
+    castBusy = false; netFail('拿流');
+    toast(/abort/i.test(e.name||'') ? '拿流超时（35s），换一集或换一条结果' : '拿流网络错误', false);
+  }
 }
 
 // 本地播放（内置播放器）：拿流 → 播放器里播（mp4 直接 / m3u8 用 hls.js）
@@ -1268,10 +1407,10 @@ async function clearSearchHistory() {
 }
 function escapeHtml(s){ return String(s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function pickSite(u, title) {
-  // 点搜索结果 → 原地嗅探集数（HTTP-first 链路）：资源站 → /api/sniff → 集数网格 → 投屏
-  // 不切页（#ep-card 在 #page-search，原地显示，不 goPage('home'——没有 page-home）
+  // 点搜索结果 → 层叠进入全屏详情（真封面 + 真元数据 + 集数 + ⭐收藏），不再原地展开
+  // 原地展开的集数卡藏在几屏以下，用户只看到 toast「找到 30 集」却看不到内容 = 假没进去
   if(!u) return;
-  sniff(u, title||u);
+  openDetail(u, title || u);
 }
 
 // ── 电视选择 ──
@@ -1279,8 +1418,12 @@ function selectTV(name) {
   toast('正在选择 '+name+'…');
   apiGet('/api/tv/select?name='+encodeURIComponent(name), 15000).then(d=>{
     netOk();
-    if(d.ok) { toast('已选择 '+d.tv); goPage('home'); }
-    else toast(d.msg||'选择失败', false);
+    if(d.ok) {
+      // 从播放器📺过来的：选完电视立刻真投屏，成功后才进遥控器页
+      const p = pendingCast; pendingCast = null;
+      if(p) { toast('已选择 '+d.tv+'，开始投屏'); doCast(p); }
+      else toast('已选择 '+d.tv);
+    } else toast(d.msg||'选择失败', false);
     refresh();
   }).catch(e=>{ toast('选择电视失败: '+e.message, false); netFail('选择电视'); });
 }
@@ -1504,17 +1647,10 @@ function refresh() {
 
 function renderBubbles(tvs, selected, playingTitle) {
   const el = document.getElementById('bubbles');
-  const selfs = tvs.filter(t => t.name === SELF_NAME);
-  const realTVs = tvs.filter(t => !selfs.includes(t));
+  // 无中转后「本机 MyCast」不再是一个投屏目标，只显示真实电视
+  const realTVs = (tvs || []).filter(t => t.name !== SELF_NAME);
 
   let html = '';
-  html += '<div class="bub" style="cursor:default">'+
-    '<span class="bub-tag self">本机</span>'+
-    '<div class="bub-ic self">'+(playingTitle?'📡':'📢')+'</div>'+
-    '<div class="bub-name">MyCast</div>'+
-    '<div class="bub-ip">'+(playingTitle?'投屏中':'待机')+'</div>'+
-  '</div>';
-
   if(realTVs.length) {
     realTVs.forEach(t => {
       const sel = t.name === selected;

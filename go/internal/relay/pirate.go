@@ -46,21 +46,20 @@ func (p *PirateSource) Resolve(_ context.Context) (*medialib.Stream, error) {
 
 // Cast 投屏：拿流后直接投给电视（电视选择由 relay 内部管理）。
 func (p *PirateSource) Cast(ctx context.Context) error {
-	st, err := p.Resolve(ctx)
-	if err != nil {
-		return err
-	}
-	p.Rl.CastStream(st.URL, st.Headers["Referer"])
-	return nil
+	_, err := p.CastWith(ctx)
+	return err
 }
 
-// CastWith 拿流+投屏，返回流信息（给 server 展示 url/mime/ref）。
+// CastWith 拿流 + 直接把真 URL 推电视（无本地 /m/ 中转会话）。
+// 同步返回错误：SOAP 推失败必须让前端看到，不能假装成功。
 func (p *PirateSource) CastWith(ctx context.Context) (*medialib.Stream, error) {
 	st, err := p.Resolve(ctx)
 	if err != nil {
 		return nil, err
 	}
-	p.Rl.CastStream(st.URL, st.Headers["Referer"])
+	if err := p.Rl.PushDirect(st.URL, st.Title, st.Mime); err != nil {
+		return nil, err
+	}
 	return st, nil
 }
 
