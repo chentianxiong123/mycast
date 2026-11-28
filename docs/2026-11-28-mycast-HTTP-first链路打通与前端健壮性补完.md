@@ -148,6 +148,43 @@ video.readyState = 4，currentTime = 3.99（真的在播）
 - **前端老元素删了要同步清函数**：`refresh/pollPlay` 引用已删 DOM，被 `.catch` 吞成"后端断连"，排查方向完全被带偏。
 - **SearXNG 的 baidu `tn=json` 已失效**（返回验证页），别再照抄；带 BDUSS 提 HTML 内嵌 JSON 才是现在能走的路。
 
+## 补记：ArtPlayer 在 mygo(WebKitGTK) 一播放就卡死/“崩了”的真相
+
+换 ArtPlayer 后用户在 mygo 里反馈“一播放就崩了”。别猜，用 mygo 的 `Page().Eval()` 直接在真 WebKitGTK 里复现并取回状态：
+
+```
+临时诊断（查完已删）：MYCAST_EVAL_FILE=/tmp/probe.js MYCAST_EVAL_DELAY=4000 ./mycast-mygo
+```
+
+结果（关键证据）：
+```
+ua: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/60.5 Safari/605.1.15
+Hls.isSupported() = true
+video.canPlayType('application/vnd.apple.mpegurl') = ""   // 原生不支持 HLS，走 hls.js
+before: cur=0, readyState=4, video.error=null
+        err=NotAllowedError: The request is not allowed by the user agent or the platform...
+```
+
+**真相**：不是进程崩溃（mygo + WebKitWebProcess 都在，无 segfault/OOM），是 **WebKitGTK 的自动播放策略**：
+`/api/cast` 是异步 fetch，等拿到流再调 `video.play()` 时**用户手势早就丢了** → `play()` 被拒 → 画面永远卡在 ArtPlayer loading 圈（`00:00 / 46:16`），看起来就像崩了。
+
+另外我的 WebKitGTK 判断也写错了：UA 里**没有 “WebKitGTK” 字样**，只有 `AppleWebKit/605.1.15 Version/60.5`，所以给 WebKit 准备的降配（关 worker/PIP/快捷键）根本没生效。
+
+修法：
+1. 检测改成 `/AppleWebKit/i.test(ua) && !/Chrome|Chromium|Edg/i.test(ua)`（真机 UA 验证为 `true`）
+2. WebKit 分支：`enableWorker=false`、`lowLatencyMode=false`、关设置面板/PIP/快捷键
+3. **`play()` 拒绝时不再 `catch(()=>{})` 吞掉**：显示居中的「▶ 点这里开始播放」按钮，用户点一下补回手势再 `art.play()`
+4. `video:play` 事件隐藏按钮、清错误；`closePlayer()` 也清按钮状态
+
+真机复验：
+```
+修复前: cur=0, tapVisible=true, err=NotAllowedError
+点兜底按钮后: cur=2.75, tapVisible=false, err=null   ✅ 正常播放
+Chrome 纯 Web 无回归: cur=5.30, tapHidden=true, err=null（自动播放照旧）
+```
+
+**教训**：`play().catch(()=>{})` 是前端最坑的静默失败之一——把「被浏览器拒绝」变成「卡在 loading」。异步链路拿用户手势必须准备显式补手势入口。
+
 ## 相关文件
 
 - `go/internal/search/search.go`：baidu `rn=10` 分页对齐

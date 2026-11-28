@@ -6,6 +6,7 @@
 <title>MyCast</title>
 <link rel="icon" type="image/png" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAD80lEQVR4nL2XTWgdVRTHf+femem8V5rYaqu4EuxKitCl1EUtVEWkxC/cWDVIV1Zx05WLdONKcCEBwaoVa0FwEwpSWsUWUSNSKIRgsSpSDLgolqQlL5M3M/e4uHfyPpxnns2LB+4w3Lnn638+7hlREAEF0EOvTyIcQfVB0CaKMAoSFKSFyBzKCTnz7kkABRFlyvDc9SaFPYWNJ3AluDKYNEISwFi/ynyGqDzM5ztbBo4rOadJGxOUWYHmDlEwI16ioLmjzArSxgQ5p+G4ij7z6kvEycfk7RyIR+z3IMqJk5i8/XKEcUehVMRZZDQhX5dULZSKcUcjhD1oIdj/SzuAGLQAYU+EJR19xg1NaYRRqK02BTGg7vbtEzoyBuiIMEFZHbUziOPB3/+NFN9h8gySZKCMgEC/5QZWVuDgAXjycWik3oNhs0TDI8vg7Fdw9ksvQ12dATUCJNTtwf1gDXx9AdIUNBhrjFdSI9DzC6xksO8heHQ/nDvve0GNrxFShwAgQfivv8H7H8D4OJTOf1vJwAikjeBxX55YA4tLcNcO2H1/x6EaCwYgAGv7WxLYcQeMbQMXjHr+Wbh6Fa5c8d42Gj5sznklxoAVzwtgg7xaBGpzgNA+ARxoAVp6CXkOD++Dp5+Cy5fh4gWYn/fx3ro1hEcDTxWy0I71dhAgvFceWIHlZb+/d69f167B7Hcw+z2sroK1/rx0yfrPCNgQtwqNyoPqYnHOewuwa6dfsYG2BoXaqZoNISD0xlDUx9wYWPgDvr0IP87CjRs+BJHxZwYhODQC1b6IFxoJOAUTwS8/w/kv4NIPPvZpCndu70rCwFOFwbgNIFDk0FryKDjnDfpoGsrCl6G1sNqCrEu4MZ6nyDeCAL6ed90NjzwGzWanDEVCpmtvc0JYK8PWMtxzry/PKieGR0A809wlOPAEvPJazaEhKM/hm3MhCalFQPTY5D+3gyO4EraN9xrWbsPkG3Df7s4tJwILv8OH74CNemXdWvKIrI2+vVSPQGWEtbC82GEUgbwNSey/YTvnkwSWl7wBFdQCxFEXf60B61y1cZ9HNoHP3oOx7fRIvrUISeSn3m5SrVXcZ0CF+YDBpPs9MvDXn3B9ofeYsX526B8+apV3dPYNJMMMHgpbYpCkb1u7vB1SDv46zjCS1pXIesw9VPX9YUkEnGYGyzyxUYy6tYax6UsdsVEs8wbVaRIjCOXI/4YG/iVRkhhBdVpUEd56YYax5iFutgoE49vXZpA6FMdYM+Jm6wxvfjohOjVl4KcmjfQUSTRB6aAIl8pIKVxQ1kC7mGElOwwPtEQVEQlz7NsvTiJyhNJtzu+5NXOonpBjn5wEUEX+BnvWw6z3SzcoAAAAAElFTkSuQmCC">
 <script src="/static/hls.min.js"></script>
+<script src="/static/artplayer.min.js"></script>
 <style>
 :root{
   --bg:#0a0b0e;--bg2:#0f1118;--card:#141720;--card2:#1a1e2a;
@@ -311,22 +312,16 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
 .detail-close-btn{background:var(--card2);color:var(--dim)}
 .detail-play-btn:disabled{opacity:.4}
 
-/* ═══════════ 内置播放器（学 OnScreen watch）═══ */
+/* ═══════════ 内置播放器（ArtPlayer 现代 UI + hls.js 解码）═══ */
 .player-overlay{position:fixed;inset:0;z-index:80;background:#000;display:flex;flex-direction:column}
-#player-video{flex:1;width:100%;height:100%;object-fit:contain;background:#000}
-.player-bar{position:absolute;top:0;left:0;right:0;display:flex;align-items:center;gap:10px;padding:10px 14px;background:linear-gradient(transparent,#000 30%);z-index:81}
-.player-title{flex:1;color:#fff;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.player-close{width:36px;height:36px;border:none;border-radius:50%;background:rgba(255,255,255,.15);color:#fff;font-size:16px}
-/* 播放器底部控制栏：上一集/下一集/倍速/全屏 */
-.player-ctrl{position:absolute;bottom:0;left:0;right:0;display:flex;flex-direction:column;gap:8px;padding:12px 14px;background:linear-gradient(transparent,#000 60%);z-index:81}
-.pc-progress{position:relative;height:22px;cursor:pointer;touch-action:none;display:flex;align-items:center}
-.pc-fill{height:4px;border-radius:2px;background:linear-gradient(90deg,var(--acc),#ff7a45);position:absolute;left:0;top:50%;transform:translateY(-50%);width:0}
-.pc-progress::before{content:'';position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);height:4px;border-radius:2px;background:rgba(255,255,255,.2)}
-.pc-time{position:absolute;right:0;top:0;font-size:10px;color:rgba(255,255,255,.8);font-variant-numeric:tabular-nums}
-.pc-btns{display:flex;align-items:center;justify-content:center;gap:10px}
-.pc-btn{flex:1;max-width:160px;height:44px;border:none;border-radius:10px;background:rgba(255,255,255,.15);color:#fff;font-size:14px;font-weight:600;cursor:pointer;white-space:nowrap}
-.pc-btn:active{background:rgba(255,255,255,.3)}
-.pc-btn:disabled{opacity:.35;cursor:default}
+.artplayer-app{flex:1;width:100%;min-height:0;overflow:hidden}
+.player-bar{position:absolute;top:0;left:0;right:0;display:flex;align-items:center;gap:8px;padding:10px 14px;z-index:82;pointer-events:none;background:linear-gradient(rgba(0,0,0,.75),transparent)}
+.player-title{flex:1;color:#fff;font-size:14px;font-weight:600;text-shadow:0 1px 6px #000;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.player-btn{pointer-events:auto;width:36px;height:36px;flex:0 0 auto;border:1px solid rgba(255,255,255,.18);border-radius:10px;background:rgba(20,23,32,.68);color:#fff;font-size:15px;cursor:pointer}
+.player-btn:active{background:rgba(255,255,255,.3)}
+.player-btn:disabled{opacity:.35;cursor:default}
+.player-tap{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:83;padding:14px 26px;border:1px solid rgba(255,255,255,.3);border-radius:28px;background:rgba(20,23,32,.85);color:#fff;font-size:16px;font-weight:700;cursor:pointer;backdrop-filter:blur(8px)}
+.player-tap:active{background:rgba(255,77,109,.7)}
 </style>
 </head>
 <body>
@@ -511,26 +506,16 @@ input[type=range].vrange::-moz-range-thumb{width:16px;height:16px;border-radius:
   </div>
 </div>
 
-<!-- ═══════════ 内置播放器（学 OnScreen watch：全屏 video + hls.js 播 m3u8）═══ -->
+<!-- ═══════════ 内置播放器（ArtPlayer 现代 UI；m3u8 用 hls.js 解码）═══ -->
 <div id="player-overlay" class="player-overlay hidden">
-  <video id="player-video" controls playsinline></video>
   <div class="player-bar">
-    <div class="player-title" id="player-title">…</div>
-    <button class="player-close" onclick="closePlayer()">✕</button>
+    <span class="player-title" id="player-title">…</span>
+    <button class="player-btn" id="pc-prev" onclick="prevEp()" disabled>⏮</button>
+    <button class="player-btn" id="pc-next" onclick="nextEp()" disabled>⏭</button>
+    <button class="player-btn" onclick="closePlayer()">✕</button>
   </div>
-  <!-- 播放器底部控制栏：上一集/下一集/倍速/全屏 -->
-  <div class="player-ctrl">
-    <div class="pc-progress" id="pc-progress">
-      <div class="pc-fill" id="pc-fill"></div>
-      <div class="pc-time" id="pc-time">0:00 / 0:00</div>
-    </div>
-    <div class="pc-btns">
-      <button class="pc-btn" id="pc-prev" onclick="prevEp()" disabled>⏮ 上一集</button>
-      <button class="pc-btn" id="pc-next" onclick="nextEp()" disabled>下一集 ⏭</button>
-      <button class="pc-btn" id="pc-speed" onclick="cycleSpeed()">1x</button>
-      <button class="pc-btn" onclick="toggleFullscreen()">⛶ 全屏</button>
-    </div>
-  </div>
+  <div id="artplayer-app" class="artplayer-app"></div>
+  <button id="player-tap" class="player-tap hidden" onclick="playTap()">▶ 点这里开始播放</button>
 </div>
 
 <!-- ═══════════ 底部导航 ═══════════ -->
@@ -993,41 +978,87 @@ function closeDetail() {
   selEp = null;
 }
 
-// ═══════════ 内置播放器（本地也能播：mp4 直接，m3u8 用 hls.js）═══
-let hls = null;
+// ═══════════ 内置播放器（ArtPlayer 现代 UI；m3u8 交给 hls.js 解码）═══
+let art = null, artHls = null;
+// WebKitGTK（mygo 桌面）检测：它的 MSE/autoplay/PIP 跟 Chrome 不一样，要降配
+// mygo 的 UA 实测：Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/60.5 Safari/605.1.15
+// 不含 "WebKitGTK" 字样，之前那个判断漏了 → WebKit 降配完全没生效。
+const IS_WEBKITGTK = /AppleWebKit/i.test(navigator.userAgent) && !/Chrome|Chromium|Edg/i.test(navigator.userAgent);
 function playLocal(url, mime, title, epsCtx) {
   if(!url) { toast('无播放地址', false); return; }
   const ov = document.getElementById('player-overlay');
-  const v = document.getElementById('player-video');
   ov.classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
   document.getElementById('player-title').textContent = title || '本地播放';
-  // 记住集数上下文（上一集/下一集）
   playEps = epsCtx || { eps: [], index: 0 };
   updatePlayerCtl();
-  initPlayerProgress();
-  // 播放进度归媒体库：记当前剧集标题+集数 URL（回写 /api/library/progress）
   playPosKey = (title || '').trim();
   playPosURL = (selEp && selEp.url) ? selEp.url : '';
-  // 销毁旧 hls
-  if(hls) { hls.destroy(); hls = null; }
+  lastSavePos = 0;
+  if(art) { art.destroy(); art = null; }
+  if(artHls) { artHls.destroy(); artHls = null; }
   const isHLS = (mime||'').indexOf('mpegurl')>=0 || (mime||'').indexOf('m3u8')>=0 || /\.m3u8/.test(url);
-  if(isHLS) {
-    // m3u8：需要 hls.js（浏览器原生 <video> 不播 m3u8）
-    if(window.Hls && Hls.isSupported()) {
-      hls = new Hls();
-      hls.loadSource(url);
-      hls.attachMedia(v);
-      hls.on(Hls.Events.MANIFEST_PARSED, ()=>{ v.play().catch(()=>{}); });
-    } else if(v.canPlayType('application/vnd.apple.mpegurl')) {
-      v.src = url; v.play().catch(()=>{});
-    } else {
-      toast('需 hls.js 播 m3u8（请确认 /static/hls.min.js 加载）', false);
-    }
-  } else {
-    // mp4/直链：直接播
-    v.src = url;
-    v.play().catch(()=>{});
-  }
+  if(!window.Artplayer) { toast('播放器资源未加载（/static/artplayer.min.js）', false); return; }
+  art = new Artplayer({
+    container: '#artplayer-app',
+    url: url,
+    title: title || '',
+    type: isHLS ? 'm3u8' : undefined,
+    customType: {
+      m3u8: function(video, src) {
+        if(window.Hls && Hls.isSupported()) {
+          // WebKitGTK 的 worker MSE 不稳（一播就卡死/崩），关掉 worker + 关自动低延迟
+          artHls = new Hls({
+            enableWorker: !IS_WEBKITGTK,
+            lowLatencyMode: false,
+            maxBufferLength: IS_WEBKITGTK ? 10 : 30,
+          });
+          artHls.loadSource(src);
+          artHls.attachMedia(video);
+          artHls.on(Hls.Events.MANIFEST_PARSED, ()=>{
+            video.play().catch(err=>{
+              // WebKitGTK 异步拿流后失去了用户手势 → 自动播放被拒，画面卡在 loading 圈。
+              // 给一个显眼的「点这里播放」按钮（用户一点就有手势，能起播）。
+              window.__playerErr = String(err);
+              const tap = document.getElementById('player-tap');
+              if(tap) tap.classList.remove('hidden');
+            });
+          });
+          artHls.on(Hls.Events.ERROR, (_,data)=>{
+            if(!data || !data.fatal) return;
+            toast('播放出错：'+(data.type||'')+'，换一集试试', false);
+          });
+        } else if(video.canPlayType('application/vnd.apple.mpegurl')) {
+          video.src = src; video.play().catch(()=>{});
+        } else {
+          toast('当前浏览器不支持 m3u8 播放', false);
+        }
+      },
+    },
+    autoplay: true,
+    muted: false,
+    loop: false,
+    setting: !IS_WEBKITGTK,     // WebKitGTK 设置面板/PIP/快捷键容易触发渲染崩溃
+    playbackRate: true,
+    fullscreen: true,
+    pip: !IS_WEBKITGTK,
+    hotkey: !IS_WEBKITGTK,
+    lang: 'zh-cn',
+  });
+  art.on('video:timeupdate', paintPlayerProgress);
+  art.on('video:play', ()=>{ const tap=document.getElementById('player-tap'); if(tap) tap.classList.add('hidden'); window.__playerErr=null; });
+  art.on('video:ended', ()=>{
+    const n = document.getElementById('pc-next');
+    if(n && !n.disabled) nextEp();
+  });
+}
+// 自动播放被拒时的兜底按钮（WebKitGTK 真机实测必需）
+function playTap() {
+  if(!art) return;
+  const tap=document.getElementById('player-tap');
+  art.play().then(()=>{ if(tap) tap.classList.add('hidden'); }).catch(err=>{
+    window.__playerErr=String(err); toast('播放失败：'+err, false);
+  });
 }
 
 // ── 播放器增强：上一集/下一集/倍速/全屏 ──
@@ -1056,53 +1087,18 @@ function nextEp() {
   if(ep) playEpLocalCtx(ep, '第'+ep.index+'集');
 }
 
-function cycleSpeed() {
-  const speeds = [0.5, 0.75, 1, 1.25, 1.5, 2];
-  playSpeed = speeds[(speeds.indexOf(playSpeed)+1)%speeds.length];
-  const v = document.getElementById('player-video');
-  if(v) v.playbackRate = playSpeed;
-  const b = document.getElementById('pc-speed');
-  if(b) b.textContent = playSpeed + 'x';
-  toast('倍速 '+playSpeed+'x');
-}
+// 倍速/全屏/进度条/音量都由 ArtPlayer 内置，旧的自绘控制已删。
 
-function toggleFullscreen() {
-  const ov = document.getElementById('player-overlay');
-  if(document.fullscreenElement) document.exitFullscreen().catch(()=>{});
-  else ov.requestFullscreen().catch(()=>{});
-}
-
-// ── 播放器进度条：timeupdate 更新 + 点击 seek ──
-function initPlayerProgress() {
-  const v = document.getElementById('player-video');
-  if(!v) return;
-  v.addEventListener('timeupdate', paintPlayerProgress);
-  v.addEventListener('loadedmetadata', paintPlayerProgress);
-  v.addEventListener('ended', ()=>{ const n=document.getElementById('pc-next'); if(n && !n.disabled) nextEp(); });
-  const bar = document.getElementById('pc-progress');
-  if(bar) {
-    bar.addEventListener('click', e=>{
-      const r = bar.getBoundingClientRect();
-      const pct = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
-      if(v.duration) { v.currentTime = pct * v.duration; paintPlayerProgress(); }
-    });
-  }
-}
 function fmtPlayTime(s) {
   if(!isFinite(s) || s < 0) s = 0;
   const m = Math.floor(s/60), sec = Math.floor(s%60);
   return m + ':' + String(sec).padStart(2,'0');
 }
 function paintPlayerProgress() {
-  const v = document.getElementById('player-video');
-  const fill = document.getElementById('pc-fill');
-  const t = document.getElementById('pc-time');
-  if(!v || !fill) return;
-  const pct = v.duration ? (v.currentTime / v.duration) * 100 : 0;
-  fill.style.width = pct + '%';
-  if(t) t.textContent = fmtPlayTime(v.currentTime) + ' / ' + fmtPlayTime(v.duration||0);
-  // 播放进度归媒体库：localStorage 记当前位置（按当前剧集标题）
-  if(v.duration && pct > 0) savePlayPos(pct);
+  if(!art) return;
+  const dur = art.duration || 0, cur = art.currentTime || 0;
+  const pct = dur > 0 ? (cur / dur) * 100 : 0;
+  if(dur > 0 && pct > 0) savePlayPos(pct);
 }
 
 // ── 播放进度归媒体库（SQLite 持久化，跨设备不丢）──
@@ -1152,9 +1148,10 @@ function playEpLocalCtx(ep, epTitle) {
 }
 
 function closePlayer() {
-  const v = document.getElementById('player-video');
-  if(hls) { hls.destroy(); hls = null; }
-  v.pause(); v.src = '';
+  if(art) { art.destroy(); art = null; }
+  if(artHls) { artHls.destroy(); artHls = null; }
+  document.body.style.overflow = '';
+  const tap = document.getElementById('player-tap'); if(tap) tap.classList.add('hidden');
   document.getElementById('player-overlay').classList.add('hidden');
 }
 function epLoading(msg) {

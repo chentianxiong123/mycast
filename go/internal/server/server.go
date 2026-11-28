@@ -37,6 +37,9 @@ var tplFS embed.FS
 //go:embed web/static/hls.min.js
 var hlsJS []byte
 
+//go:embed web/static/artplayer.min.js
+var artPlayerJS []byte
+
 // Port 默认端口（小众端口：避开 8080/8000/3000/5000 常见位，防局域网冲突）
 const Port = "18080"
 
@@ -606,6 +609,11 @@ func New(opts Options) *Instance {
 		w.Header().Set("Content-Type", "application/javascript")
 		w.Header().Set("Cache-Control", "public, max-age=86400")
 		_, _ = w.Write(hlsJS)
+	})
+	mux.HandleFunc("/static/artplayer.min.js", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/javascript")
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		_, _ = w.Write(artPlayerJS)
 	})
 
 	// MCP 端点（Streamable HTTP）：给 AI 暴露 search/sniff/cast 工具（老人一句话投屏）
